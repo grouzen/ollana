@@ -4,7 +4,7 @@ Ollama over LAN
 
 # Architecture
 
-![[docs/architecture-overview.png]]
+![Architecture Overview](docs/architecture-overview.png)
 
 
 # Contributing
