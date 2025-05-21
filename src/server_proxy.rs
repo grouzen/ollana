@@ -7,41 +7,38 @@ use url::Url;
 
 use crate::constants;
 
-pub struct ClientProxy {
+pub struct ServerProxy {
     pub host: String,
     pub port: u16,
-    // TODO: determine via UDP broadcasting discovery
-    pub server_host: String,
-    pub server_port: u16,
+    pub ollama_host: String,
+    pub ollama_port: u16,
 }
 
-impl Default for ClientProxy {
+impl Default for ServerProxy {
     fn default() -> Self {
         Self {
-            host: constants::OLLANA_CLIENT_PROXY_DEFAULT_ADDRESS.to_string(),
-            port: constants::OLLANA_CLIENT_PROXY_DEFAULT_PORT,
-            server_host: constants::OLLANA_SERVER_PROXY_DEFAULT_ADDRESS.to_string(),
-            server_port: constants::OLLANA_SERVER_PROXY_DEFAULT_PORT,
+            host: constants::OLLANA_SERVER_PROXY_DEFAULT_ADDRESS.to_string(),
+            port: constants::OLLANA_SERVER_PROXY_DEFAULT_PORT,
+            ollama_host: constants::OLLAMA_DEFAULT_ADDRESS.to_string(),
+            ollama_port: constants::OLLAMA_DEFAULT_PORT,
         }
     }
 }
 
-// http proxy that listens on the default ollama port and passes
-// the requests to a remote ollana server port
-impl ClientProxy {
+impl ServerProxy {
     pub async fn run_server(&self) -> io::Result<()> {
         let client = reqwest::Client::default();
-        let ollana_server_socket_addr = (self.server_host.clone(), self.server_port)
+        let ollama_socket_addr = (self.ollama_host.clone(), self.ollama_port)
             .to_socket_addrs()?
             .next()
             .expect("server proxy address is invalid");
-        let ollana_server_url = format!("http://{ollana_server_socket_addr}");
-        let ollana_server_url = Url::parse(&ollana_server_url).unwrap();
+        let ollama_url = format!("http://{ollama_socket_addr}");
+        let ollama_url = Url::parse(&ollama_url).unwrap();
 
         HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(client.clone()))
-                .app_data(web::Data::new(ollana_server_url.clone()))
+                .app_data(web::Data::new(ollama_url.clone()))
                 .default_service(web::to(Self::forward))
         })
         .bind((self.host.clone(), self.port))?
@@ -52,7 +49,7 @@ impl ClientProxy {
     async fn forward(
         req: HttpRequest,
         client: web::Data<reqwest::Client>,
-        ollana_server_url: web::Data<Url>,
+        ollama_url: web::Data<Url>,
         mut payload: web::Payload,
         method: actix_web::http::Method,
     ) -> Result<HttpResponse, Error> {
@@ -64,27 +61,26 @@ impl ClientProxy {
             }
         });
 
-        let mut ollana_server_uri = (**ollana_server_url).clone();
-        ollana_server_uri.set_path(req.uri().path());
-        ollana_server_uri.set_query(req.uri().query());
+        let mut ollama_uri = (**ollama_url).clone();
+        ollama_uri.set_path(req.uri().path());
+        ollama_uri.set_query(req.uri().query());
 
-        let ollana_server_req = client
+        let server_req = client
             .request(
                 reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap(),
-                ollana_server_uri,
+                ollama_uri,
             )
             .body(reqwest::Body::wrap_stream(UnboundedReceiverStream::new(rx)));
 
-        let ollana_server_response = ollana_server_req
+        let ollama_response = server_req
             .send()
             .await
             .map_err(error::ErrorInternalServerError)?;
 
         let mut response = HttpResponse::build(
-            actix_web::http::StatusCode::from_u16(ollana_server_response.status().as_u16())
-                .unwrap(),
+            actix_web::http::StatusCode::from_u16(ollama_response.status().as_u16()).unwrap(),
         );
 
-        Ok(response.streaming(ollana_server_response.bytes_stream()))
+        Ok(response.streaming(ollama_response.bytes_stream()))
     }
 }
