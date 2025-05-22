@@ -5,35 +5,49 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use url::Url;
 
-use crate::constants;
+use crate::{constants, error::OllanaError};
 
 pub struct ServerProxy {
-    pub host: String,
-    pub port: u16,
-    pub ollama_host: String,
-    pub ollama_port: u16,
+    host: String,
+    port: u16,
+    ollama_url: Url,
 }
 
 impl Default for ServerProxy {
     fn default() -> Self {
+        let ollama_url = format!(
+            "http://{}:{}",
+            constants::OLLAMA_DEFAULT_ADDRESS,
+            constants::OLLAMA_DEFAULT_PORT
+        );
+        let ollama_url = Url::parse(&ollama_url).unwrap();
+
         Self {
             host: constants::OLLANA_SERVER_PROXY_DEFAULT_ADDRESS.to_string(),
             port: constants::OLLANA_SERVER_PROXY_DEFAULT_PORT,
-            ollama_host: constants::OLLAMA_DEFAULT_ADDRESS.to_string(),
-            ollama_port: constants::OLLAMA_DEFAULT_PORT,
+            ollama_url: ollama_url,
         }
     }
 }
 
 impl ServerProxy {
-    pub async fn run_server(&self) -> io::Result<()> {
-        let client = reqwest::Client::default();
-        let ollama_socket_addr = (self.ollama_host.clone(), self.ollama_port)
+    pub fn try_new(ollama_host: String, ollama_port: u16) -> crate::error::Result<ServerProxy> {
+        let server_socket_addr = (ollama_host, ollama_port)
             .to_socket_addrs()?
             .next()
-            .expect("server proxy address is invalid");
-        let ollama_url = format!("http://{ollama_socket_addr}");
-        let ollama_url = Url::parse(&ollama_url).unwrap();
+            .ok_or_else(|| OllanaError::Other("Ollama address is invalid".to_string()))?;
+        let ollama_url = format!("http://{server_socket_addr}");
+        let ollama_url = Url::parse(&ollama_url).map_err(OllanaError::from)?;
+
+        Ok(ServerProxy {
+            ollama_url: ollama_url,
+            ..Default::default()
+        })
+    }
+
+    pub async fn run_server(&self) -> io::Result<()> {
+        let client = reqwest::Client::default();
+        let ollama_url = self.ollama_url.clone();
 
         HttpServer::new(move || {
             App::new()

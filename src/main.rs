@@ -14,3 +14,8 @@ async fn main() -> io::Result<()> {
     // client_proxy.run_server().await
     server_proxy.run_server().await
 }
+
+enum Mode {
+    Client,
+    Server,
+}
