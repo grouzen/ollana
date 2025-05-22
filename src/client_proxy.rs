@@ -8,6 +8,7 @@ use url::Url;
 use crate::{constants, error::OllanaError};
 
 pub struct ClientProxy {
+    client: reqwest::Client,
     host: String,
     port: u16,
     // TODO: determine via UDP broadcasting discovery
@@ -24,6 +25,7 @@ impl Default for ClientProxy {
         let server_url = Url::parse(&server_url).unwrap();
 
         Self {
+            client: reqwest::Client::default(),
             host: constants::OLLANA_CLIENT_PROXY_DEFAULT_ADDRESS.to_string(),
             port: constants::OLLANA_CLIENT_PROXY_DEFAULT_PORT,
             server_url: server_url,
@@ -49,7 +51,7 @@ impl ClientProxy {
     }
 
     pub async fn run_server(&self) -> io::Result<()> {
-        let client = reqwest::Client::default();
+        let client = self.client.clone();
         let server_url = self.server_url.clone();
 
         HttpServer::new(move || {

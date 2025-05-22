@@ -8,6 +8,7 @@ use url::Url;
 use crate::{constants, error::OllanaError};
 
 pub struct ServerProxy {
+    client: reqwest::Client,
     host: String,
     port: u16,
     ollama_url: Url,
@@ -23,6 +24,7 @@ impl Default for ServerProxy {
         let ollama_url = Url::parse(&ollama_url).unwrap();
 
         Self {
+            client: reqwest::Client::default(),
             host: constants::OLLANA_SERVER_PROXY_DEFAULT_ADDRESS.to_string(),
             port: constants::OLLANA_SERVER_PROXY_DEFAULT_PORT,
             ollama_url: ollama_url,
@@ -46,7 +48,7 @@ impl ServerProxy {
     }
 
     pub async fn run_server(&self) -> io::Result<()> {
-        let client = reqwest::Client::default();
+        let client = self.client.clone();
         let ollama_url = self.ollama_url.clone();
 
         HttpServer::new(move || {
