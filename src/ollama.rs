@@ -33,7 +33,7 @@ pub struct VersionResponse {
 }
 
 impl Ollama {
-    pub fn try_new(host: String, port: u16) -> crate::error::Result<Ollama> {
+    pub fn try_new(host: String, port: u16) -> crate::error::Result<Self> {
         let socket_addr = (host, port)
             .to_socket_addrs()?
             .next()
@@ -54,8 +54,7 @@ impl Ollama {
         self.client
             .get(uri)
             .send()
-            .await
-            .map_err(OllanaError::from)?
+            .await?
             .json::<VersionResponse>()
             .await
             .map_err(OllanaError::from)

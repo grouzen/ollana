@@ -36,7 +36,7 @@ impl Default for ClientProxy {
 // http proxy that listens on the default ollama port and passes
 // the requests to a remote ollana server port
 impl ClientProxy {
-    pub fn try_new(server_host: String, server_port: u16) -> crate::error::Result<ClientProxy> {
+    pub fn try_new(server_host: String, server_port: u16) -> crate::error::Result<Self> {
         let server_socket_addr = (server_host, server_port)
             .to_socket_addrs()?
             .next()
@@ -84,23 +84,23 @@ impl ClientProxy {
         server_uri.set_path(req.uri().path());
         server_uri.set_query(req.uri().query());
 
-        let ollana_server_req = client
+        let server_request = client
             .request(
                 reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap(),
                 server_uri,
             )
             .body(reqwest::Body::wrap_stream(UnboundedReceiverStream::new(rx)));
 
-        let ollana_server_response = ollana_server_req
+        let server_response = server_request
             .send()
             .await
             .map_err(actix_web::error::ErrorInternalServerError)?;
 
         let mut response = HttpResponse::build(
-            actix_web::http::StatusCode::from_u16(ollana_server_response.status().as_u16())
+            actix_web::http::StatusCode::from_u16(server_response.status().as_u16())
                 .unwrap(),
         );
 
-        Ok(response.streaming(ollana_server_response.bytes_stream()))
+        Ok(response.streaming(server_response.bytes_stream()))
     }
 }

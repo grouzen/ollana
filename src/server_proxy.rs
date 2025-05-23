@@ -33,7 +33,7 @@ impl Default for ServerProxy {
 }
 
 impl ServerProxy {
-    pub fn try_new(ollama_host: String, ollama_port: u16) -> crate::error::Result<ServerProxy> {
+    pub fn try_new(ollama_host: String, ollama_port: u16) -> crate::error::Result<Self> {
         let server_socket_addr = (ollama_host, ollama_port)
             .to_socket_addrs()?
             .next()
@@ -81,14 +81,14 @@ impl ServerProxy {
         ollama_uri.set_path(req.uri().path());
         ollama_uri.set_query(req.uri().query());
 
-        let server_req = client
+        let ollama_request = client
             .request(
                 reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap(),
                 ollama_uri,
             )
             .body(reqwest::Body::wrap_stream(UnboundedReceiverStream::new(rx)));
 
-        let ollama_response = server_req
+        let ollama_response = ollama_request
             .send()
             .await
             .map_err(error::ErrorInternalServerError)?;
