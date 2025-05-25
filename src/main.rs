@@ -2,7 +2,9 @@ use std::io;
 
 use log::info;
 use ollana::{
-    client_proxy::ClientProxy, discovery::ClientDiscovery, ollama::Ollama,
+    client_proxy::ClientProxy,
+    discovery::{ClientDiscovery, ServerDiscovery},
+    ollama::Ollama,
     server_proxy::ServerProxy,
 };
 
@@ -21,7 +23,14 @@ async fn main() -> io::Result<()> {
     match detect_mode(ollama).await {
         Mode::Server => {
             info!("Running in Server Mode");
-            ServerProxy::default().run_server().await
+
+            let server_proxy = ServerProxy::default();
+            let server_discovery = ServerDiscovery::default();
+
+            tokio::select! {
+                val = server_proxy.run_server() => val,
+                val = server_discovery.run() => val,
+            }
         }
         Mode::Client => {
             info!("Running in Client Mode");
