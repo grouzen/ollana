@@ -44,19 +44,46 @@ impl Default for ServerDiscovery {
 impl ClientDiscovery {
     pub async fn run(&self) -> io::Result<()> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, RANDOM_UDP_PORT)).await?;
-        let mut stream = IntervalStream::new(time::interval(self.broadcast_interval));
-
+        let local_addr = socket.local_addr()?;
         socket.set_broadcast(true)?;
 
-        info!("Running client discovery...");
+        info!("Running client discovery on {}...", local_addr);
+
+        tokio::select! {
+            val = self.broadcast_periodically(&socket) => val,
+            val = self.handle_message(&socket) => val,
+        }
+    }
+
+    async fn broadcast_periodically(&self, socket: &UdpSocket) -> io::Result<()> {
+        let mut stream = IntervalStream::new(time::interval(self.broadcast_interval));
 
         while let Some(_) = stream.next().await {
             if let Ok(len) = self.send(&socket).await {
                 info!("Client discovery sent {} bytes", len);
-            };
+            }
         }
 
         Ok(())
+    }
+
+    async fn handle_message(&self, socket: &UdpSocket) -> io::Result<()> {
+        let mut buf: [u8; 4] = [0u8; 4];
+
+        loop {
+            if let Ok((len, addr)) = self.recv(&socket, &mut buf).await {
+                info!("Client discovery received {} bytes from {}", len, addr);
+
+                let magic = u32::from_be_bytes(buf);
+
+                if magic == PROTO_MAGIC_NUMBER {
+                    info!("Client discovery registered a server with address {}", addr);
+                } else {
+                    let hex = format!("0X{:X}", magic);
+                    debug!("Client discovery skipped message: {}", hex);
+                }
+            }
+        }
     }
 
     async fn send(&self, socket: &UdpSocket) -> io::Result<usize> {
@@ -68,13 +95,20 @@ impl ClientDiscovery {
             .await
             .inspect_err(|error| error!("Client discovery error while sending: {}", error))
     }
+
+    async fn recv(&self, socket: &UdpSocket, buf: &mut [u8; 4]) -> io::Result<(usize, SocketAddr)> {
+        socket
+            .recv_from(buf)
+            .await
+            .inspect_err(|error| error!("Server discovery error while receiving: {}", error))
+    }
 }
 
 impl ServerDiscovery {
     pub async fn run(&self) -> io::Result<()> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, self.port)).await?;
         let local_addr = socket.local_addr()?;
-        let mut buf = [0u8; 4];
+        let mut buf: [u8; 4] = [0u8; 4];
 
         info!("Running server discovery on {}...", local_addr);
 
