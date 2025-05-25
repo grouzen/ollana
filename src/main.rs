@@ -1,7 +1,10 @@
 use std::io;
 
 use log::info;
-use ollana::{client_proxy::ClientProxy, ollama::Ollama, server_proxy::ServerProxy};
+use ollana::{
+    client_proxy::ClientProxy, discovery::ClientDiscovery, ollama::Ollama,
+    server_proxy::ServerProxy,
+};
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {
@@ -22,7 +25,14 @@ async fn main() -> io::Result<()> {
         }
         Mode::Client => {
             info!("Running in Client Mode");
-            ClientProxy::default().run_server().await
+
+            let client_proxy = ClientProxy::default();
+            let client_discovery = ClientDiscovery::default();
+
+            tokio::select! {
+                val = client_proxy.run_server() => val,
+                val = client_discovery.run() => val
+            }
         }
     }
 }
