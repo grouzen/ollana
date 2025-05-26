@@ -51,7 +51,7 @@ impl ClientDiscovery {
 
         tokio::select! {
             val = self.broadcast_periodically(&socket) => val,
-            val = self.handle_message(&socket) => val,
+            val = self.handle_messages(&socket) => val,
         }
     }
 
@@ -60,19 +60,19 @@ impl ClientDiscovery {
 
         while let Some(_) = stream.next().await {
             if let Ok(len) = self.send(&socket).await {
-                info!("Client discovery sent {} bytes", len);
+                debug!("Client discovery sent {} bytes", len);
             }
         }
 
         Ok(())
     }
 
-    async fn handle_message(&self, socket: &UdpSocket) -> io::Result<()> {
+    async fn handle_messages(&self, socket: &UdpSocket) -> io::Result<()> {
         let mut buf: [u8; 4] = [0u8; 4];
 
         loop {
             if let Ok((len, addr)) = self.recv(&socket, &mut buf).await {
-                info!("Client discovery received {} bytes from {}", len, addr);
+                debug!("Client discovery received {} bytes from {}", len, addr);
 
                 let magic = u32::from_be_bytes(buf);
 
@@ -114,13 +114,13 @@ impl ServerDiscovery {
 
         loop {
             if let Ok((len, addr)) = self.recv(&socket, &mut buf).await {
-                info!("Server discovery received {} bytes from {}", len, addr);
+                debug!("Server discovery received {} bytes from {}", len, addr);
 
                 let magic = u32::from_be_bytes(buf);
 
                 if magic == PROTO_MAGIC_NUMBER {
                     if let Ok(len) = self.send(&socket, addr).await {
-                        info!("Server discovery sent {} bytes to {}", len, addr);
+                        debug!("Server discovery sent {} bytes to {}", len, addr);
                     }
                 } else {
                     let hex = format!("0X{:X}", magic);
