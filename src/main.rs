@@ -2,10 +2,10 @@ use std::io;
 
 use log::info;
 use ollana::{
-    client_proxy::ClientProxy,
     discovery::{ClientDiscovery, ServerDiscovery},
     ollama::Ollama,
-    server_proxy::ServerProxy,
+    proxy::ClientProxy,
+    proxy::ServerProxy,
 };
 
 #[actix_web::main]
