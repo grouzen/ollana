@@ -1,18 +1,20 @@
-use actix_web::{error, web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{dev::ServerHandle, error, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use futures_util::StreamExt as _;
-use std::{io, net::ToSocketAddrs};
-use tokio::sync::mpsc;
+use log::error;
+use std::net::{SocketAddr, ToSocketAddrs};
+use tokio::sync::{mpsc, oneshot::Sender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use url::Url;
 
 use crate::{constants, error::OllanaError};
 
+#[derive(Clone)]
 pub struct ClientProxy {
     client: reqwest::Client,
     host: String,
     port: u16,
-    // TODO: determine via UDP broadcasting discovery
     server_url: Url,
+    handle: Option<ServerHandle>,
 }
 
 pub struct ServerProxy {
@@ -36,6 +38,7 @@ impl Default for ClientProxy {
             host: constants::OLLANA_CLIENT_PROXY_DEFAULT_ADDRESS.to_string(),
             port: constants::OLLANA_CLIENT_PROXY_DEFAULT_PORT,
             server_url: server_url,
+            handle: None,
         }
     }
 }
@@ -58,14 +61,17 @@ impl Default for ServerProxy {
     }
 }
 
-// http proxy that listens on the default ollama port and passes
-// the requests to a remote ollana server port
 impl ClientProxy {
     pub fn try_new(server_host: String, server_port: u16) -> crate::error::Result<Self> {
         let server_socket_addr = (server_host, server_port)
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| OllanaError::Other("Server proxy address is invalid".to_string()))?;
+
+        Self::from_server_socket_addr(server_socket_addr)
+    }
+
+    pub fn from_server_socket_addr(server_socket_addr: SocketAddr) -> crate::error::Result<Self> {
         let server_url = format!("http://{server_socket_addr}");
         let server_url = Url::parse(&server_url).map_err(OllanaError::from)?;
 
@@ -75,19 +81,27 @@ impl ClientProxy {
         })
     }
 
-    pub async fn run_server(&self) -> io::Result<()> {
+    pub async fn run_server(&mut self, tx: Sender<Self>) -> crate::error::Result<()> {
         let client = self.client.clone();
         let server_url = self.server_url.clone();
 
-        HttpServer::new(move || {
+        let server = HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(client.clone()))
                 .app_data(web::Data::new(server_url.clone()))
                 .default_service(web::to(Self::forward))
         })
         .bind((self.host.clone(), self.port))?
-        .run()
-        .await
+        .run();
+
+        let handle = server.handle();
+        self.handle = Some(handle);
+
+        if let Err(_) = tx.send(self.clone()) {
+            error!("Couldn't send an updated client proxy");
+        }
+
+        server.await.map_err(OllanaError::from)
     }
 
     async fn forward(
@@ -127,6 +141,13 @@ impl ClientProxy {
 
         Ok(response.streaming(server_response.bytes_stream()))
     }
+
+    pub async fn stop(&self, graceful: bool) {
+        match &self.handle {
+            Some(handle) => handle.stop(graceful).await,
+            None => (),
+        }
+    }
 }
 
 impl ServerProxy {
@@ -144,7 +165,7 @@ impl ServerProxy {
         })
     }
 
-    pub async fn run_server(&self) -> io::Result<()> {
+    pub async fn run_server(&self) -> crate::error::Result<()> {
         let client = self.client.clone();
         let ollama_url = self.ollama_url.clone();
 
@@ -157,6 +178,7 @@ impl ServerProxy {
         .bind((self.host.clone(), self.port))?
         .run()
         .await
+        .map_err(OllanaError::from)
     }
 
     async fn forward(

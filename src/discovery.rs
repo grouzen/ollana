@@ -1,15 +1,19 @@
 use std::{
     io,
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
     time::Duration,
 };
 
 use futures_util::StreamExt;
 use log::{debug, error, info};
-use tokio::{net::UdpSocket, time};
+use tokio::{net::UdpSocket, sync::mpsc::Sender, time};
 use tokio_stream::wrappers::IntervalStream;
 
-use crate::constants;
+use crate::{
+    constants::{self, OLLANA_SERVER_PROXY_DEFAULT_PORT},
+    error::OllanaError,
+    manager::ManagerCommand,
+};
 
 const PROTO_MAGIC_NUMBER: u32 = 0x4C414E41; // LANA
 const RANDOM_UDP_PORT: u16 = 0;
@@ -42,7 +46,7 @@ impl Default for ServerDiscovery {
 }
 
 impl ClientDiscovery {
-    pub async fn run(&self) -> io::Result<()> {
+    pub async fn run(&self, cmd_tx: Sender<ManagerCommand>) -> crate::error::Result<()> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, RANDOM_UDP_PORT)).await?;
         let local_addr = socket.local_addr()?;
         socket.set_broadcast(true)?;
@@ -51,11 +55,11 @@ impl ClientDiscovery {
 
         tokio::select! {
             val = self.broadcast_periodically(&socket) => val,
-            val = self.handle_messages(&socket) => val,
+            val = self.handle_messages(&socket, cmd_tx) => val,
         }
     }
 
-    async fn broadcast_periodically(&self, socket: &UdpSocket) -> io::Result<()> {
+    async fn broadcast_periodically(&self, socket: &UdpSocket) -> crate::error::Result<()> {
         let mut stream = IntervalStream::new(time::interval(self.broadcast_interval));
 
         while let Some(_) = stream.next().await {
@@ -67,7 +71,11 @@ impl ClientDiscovery {
         Ok(())
     }
 
-    async fn handle_messages(&self, socket: &UdpSocket) -> io::Result<()> {
+    async fn handle_messages(
+        &self,
+        socket: &UdpSocket,
+        cmd_tx: Sender<ManagerCommand>,
+    ) -> crate::error::Result<()> {
         let mut buf: [u8; 4] = [0u8; 4];
 
         loop {
@@ -77,7 +85,20 @@ impl ClientDiscovery {
                 let magic = u32::from_be_bytes(buf);
 
                 if magic == PROTO_MAGIC_NUMBER {
-                    info!("Client discovery registered a server with address {}", addr);
+                    debug!("Client discovery found a server with address {}", addr);
+
+                    // TODO: replace default port with the actual server proxy port received from a server
+                    let http_addr = (addr.ip(), OLLANA_SERVER_PROXY_DEFAULT_PORT)
+                        .to_socket_addrs()?
+                        .next()
+                        .ok_or_else(|| {
+                            OllanaError::Other("Server proxy address is invalid".to_string())
+                        })?;
+
+                    cmd_tx
+                        .send(ManagerCommand::Add(http_addr))
+                        .await
+                        .unwrap_or(());
                 } else {
                     let hex = format!("0X{:X}", magic);
                     debug!("Client discovery skipped message: {}", hex);
@@ -105,7 +126,7 @@ impl ClientDiscovery {
 }
 
 impl ServerDiscovery {
-    pub async fn run(&self) -> io::Result<()> {
+    pub async fn run(&self) -> crate::error::Result<()> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, self.port)).await?;
         let local_addr = socket.local_addr()?;
         let mut buf: [u8; 4] = [0u8; 4];

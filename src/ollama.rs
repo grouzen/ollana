@@ -1,4 +1,4 @@
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 
 use serde::Deserialize;
 use url::Url;
@@ -38,6 +38,11 @@ impl Ollama {
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| OllanaError::Other("Ollama address is invalid".to_string()))?;
+
+        Self::from_socket_addr(socket_addr)
+    }
+
+    pub fn from_socket_addr(socket_addr: SocketAddr) -> crate::error::Result<Self> {
         let url = format!("http://{socket_addr}");
         let url = Url::parse(&url).map_err(OllanaError::from)?;
 

@@ -1,15 +1,8 @@
-use std::io;
-
 use log::info;
-use ollana::{
-    discovery::{ClientDiscovery, ServerDiscovery},
-    ollama::Ollama,
-    proxy::ClientProxy,
-    proxy::ServerProxy,
-};
+use ollana::{discovery::ServerDiscovery, manager::Manager, ollama::Ollama, proxy::ServerProxy};
 
 #[actix_web::main]
-async fn main() -> io::Result<()> {
+async fn main() -> ollana::error::Result<()> {
     env_logger::init();
 
     info!("Starting Ollana...");
@@ -18,9 +11,9 @@ async fn main() -> io::Result<()> {
     //    a. in such case, start ServerProxy
     //    b. otherwise, start ClientProxy
     // let client_proxy = ClientProxy::default();
-    let ollama = Ollama::default();
+    let local_ollama = Ollama::default();
 
-    match detect_mode(ollama).await {
+    match detect_mode(local_ollama).await {
         Mode::Server => {
             info!("Running in Server Mode");
 
@@ -35,13 +28,7 @@ async fn main() -> io::Result<()> {
         Mode::Client => {
             info!("Running in Client Mode");
 
-            let client_proxy = ClientProxy::default();
-            let client_discovery = ClientDiscovery::default();
-
-            tokio::select! {
-                val = client_proxy.run_server() => val,
-                val = client_discovery.run() => val
-            }
+            Manager::default().run().await
         }
     }
 }
