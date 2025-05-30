@@ -11,7 +11,6 @@ use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
     constants::{self, OLLANA_SERVER_PROXY_DEFAULT_PORT},
-    error::OllanaError,
     manager::ManagerCommand,
 };
 
@@ -46,7 +45,7 @@ impl Default for ServerDiscovery {
 }
 
 impl ClientDiscovery {
-    pub async fn run(&self, cmd_tx: Sender<ManagerCommand>) -> crate::error::Result<()> {
+    pub async fn run(&self, cmd_tx: Sender<ManagerCommand>) -> anyhow::Result<()> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, RANDOM_UDP_PORT)).await?;
         let local_addr = socket.local_addr()?;
         socket.set_broadcast(true)?;
@@ -59,7 +58,7 @@ impl ClientDiscovery {
         }
     }
 
-    async fn broadcast_periodically(&self, socket: &UdpSocket) -> crate::error::Result<()> {
+    async fn broadcast_periodically(&self, socket: &UdpSocket) -> anyhow::Result<()> {
         let mut stream = IntervalStream::new(time::interval(self.broadcast_interval));
 
         while let Some(_) = stream.next().await {
@@ -75,7 +74,7 @@ impl ClientDiscovery {
         &self,
         socket: &UdpSocket,
         cmd_tx: Sender<ManagerCommand>,
-    ) -> crate::error::Result<()> {
+    ) -> anyhow::Result<()> {
         let mut buf: [u8; 4] = [0u8; 4];
 
         loop {
@@ -92,7 +91,7 @@ impl ClientDiscovery {
                         .to_socket_addrs()?
                         .next()
                         .ok_or_else(|| {
-                            OllanaError::Other("Server proxy address is invalid".to_string())
+                            anyhow::Error::msg("Server proxy address is invalid".to_string())
                         })?;
 
                     cmd_tx
@@ -126,7 +125,7 @@ impl ClientDiscovery {
 }
 
 impl ServerDiscovery {
-    pub async fn run(&self) -> crate::error::Result<()> {
+    pub async fn run(&self) -> anyhow::Result<()> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, self.port)).await?;
         let local_addr = socket.local_addr()?;
         let mut buf: [u8; 4] = [0u8; 4];

@@ -5,12 +5,12 @@ edition = "2021"
 
 [dependencies]
 actix-web = "4.9.0"
+anyhow = "1.0.98"
 env_logger = "0.11.8"
 futures-util = "0.3.31"
 log = "0.4.27"
 reqwest = { version = "0.12.12", default-features = false, features = ["stream", "json"] }
 serde = { version = "1.0.219", features = ["derive"] }
-thiserror = "2.0.12"
 tokio = { version = "1.43.0", features = ["macros", "sync"] }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 url = "2.5.4"

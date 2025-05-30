@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, oneshot::Sender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use url::Url;
 
-use crate::{constants, error::OllanaError};
+use crate::constants;
 
 #[derive(Clone)]
 pub struct ClientProxy {
@@ -62,18 +62,18 @@ impl Default for ServerProxy {
 }
 
 impl ClientProxy {
-    pub fn try_new(server_host: String, server_port: u16) -> crate::error::Result<Self> {
+    pub fn try_new(server_host: String, server_port: u16) -> anyhow::Result<Self> {
         let server_socket_addr = (server_host, server_port)
             .to_socket_addrs()?
             .next()
-            .ok_or_else(|| OllanaError::Other("Server proxy address is invalid".to_string()))?;
+            .ok_or_else(|| anyhow::Error::msg("Server proxy address is invalid".to_string()))?;
 
         Self::from_server_socket_addr(server_socket_addr)
     }
 
-    pub fn from_server_socket_addr(server_socket_addr: SocketAddr) -> crate::error::Result<Self> {
+    pub fn from_server_socket_addr(server_socket_addr: SocketAddr) -> anyhow::Result<Self> {
         let server_url = format!("http://{server_socket_addr}");
-        let server_url = Url::parse(&server_url).map_err(OllanaError::from)?;
+        let server_url = Url::parse(&server_url)?;
 
         Ok(ClientProxy {
             server_url: server_url,
@@ -81,7 +81,7 @@ impl ClientProxy {
         })
     }
 
-    pub async fn run_server(&mut self, tx: Sender<Self>) -> crate::error::Result<()> {
+    pub async fn run_server(&mut self, tx: Sender<Self>) -> anyhow::Result<()> {
         let client = self.client.clone();
         let server_url = self.server_url.clone();
 
@@ -101,7 +101,7 @@ impl ClientProxy {
             error!("Couldn't send an updated client proxy");
         }
 
-        server.await.map_err(OllanaError::from)
+        server.await.map_err(anyhow::Error::new)
     }
 
     async fn forward(
@@ -151,13 +151,13 @@ impl ClientProxy {
 }
 
 impl ServerProxy {
-    pub fn try_new(ollama_host: String, ollama_port: u16) -> crate::error::Result<Self> {
+    pub fn try_new(ollama_host: String, ollama_port: u16) -> anyhow::Result<Self> {
         let server_socket_addr = (ollama_host, ollama_port)
             .to_socket_addrs()?
             .next()
-            .ok_or_else(|| OllanaError::Other("Ollama address is invalid".to_string()))?;
+            .ok_or_else(|| anyhow::Error::msg("Ollama address is invalid".to_string()))?;
         let ollama_url = format!("http://{server_socket_addr}");
-        let ollama_url = Url::parse(&ollama_url).map_err(OllanaError::from)?;
+        let ollama_url = Url::parse(&ollama_url)?;
 
         Ok(ServerProxy {
             ollama_url: ollama_url,
@@ -165,7 +165,7 @@ impl ServerProxy {
         })
     }
 
-    pub async fn run_server(&self) -> crate::error::Result<()> {
+    pub async fn run_server(&self) -> anyhow::Result<()> {
         let client = self.client.clone();
         let ollama_url = self.ollama_url.clone();
 
@@ -178,7 +178,7 @@ impl ServerProxy {
         .bind((self.host.clone(), self.port))?
         .run()
         .await
-        .map_err(OllanaError::from)
+        .map_err(anyhow::Error::new)
     }
 
     async fn forward(

@@ -2,7 +2,7 @@ use log::info;
 use ollana::{discovery::ServerDiscovery, manager::Manager, ollama::Ollama, proxy::ServerProxy};
 
 #[actix_web::main]
-async fn main() -> ollana::error::Result<()> {
+async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     info!("Starting Ollana...");
