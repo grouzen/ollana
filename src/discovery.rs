@@ -16,7 +16,7 @@ use crate::{
 
 const PROTO_MAGIC_NUMBER: u32 = 0x4C414E41; // LANA
 const RANDOM_UDP_PORT: u16 = 0;
-const DEFAULT_BROADCAST_INTERVAL: Duration = Duration::from_secs(30);
+const DEFAULT_BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct ClientDiscovery {
     server_port: u16,
@@ -45,7 +45,7 @@ impl Default for ServerDiscovery {
 }
 
 impl ClientDiscovery {
-    pub async fn run(&self, cmd_tx: Sender<ManagerCommand>) -> anyhow::Result<()> {
+    pub async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, RANDOM_UDP_PORT)).await?;
         let local_addr = socket.local_addr()?;
         socket.set_broadcast(true)?;
@@ -73,7 +73,7 @@ impl ClientDiscovery {
     async fn handle_messages(
         &self,
         socket: &UdpSocket,
-        cmd_tx: Sender<ManagerCommand>,
+        cmd_tx: &Sender<ManagerCommand>,
     ) -> anyhow::Result<()> {
         let mut buf: [u8; 4] = [0u8; 4];
 

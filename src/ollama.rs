@@ -5,6 +5,7 @@ use url::Url;
 
 use crate::constants;
 
+#[derive(Clone)]
 pub struct Ollama {
     client: reqwest::Client,
     url: Url,
