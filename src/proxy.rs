@@ -8,6 +8,8 @@ use url::Url;
 
 use crate::constants;
 
+pub const PROXY_DEFAULT_WORKERS_NUMBER: usize = 2;
+
 #[derive(Clone)]
 pub struct ClientProxy {
     client: reqwest::Client,
@@ -92,6 +94,7 @@ impl ClientProxy {
                 .default_service(web::to(Self::forward))
         })
         .bind((self.host.clone(), self.port))?
+        .workers(PROXY_DEFAULT_WORKERS_NUMBER)
         .run();
 
         let handle = server.handle();
@@ -176,6 +179,7 @@ impl ServerProxy {
                 .default_service(web::to(Self::forward))
         })
         .bind((self.host.clone(), self.port))?
+        .workers(PROXY_DEFAULT_WORKERS_NUMBER)
         .run()
         .await
         .map_err(anyhow::Error::new)

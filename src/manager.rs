@@ -3,7 +3,7 @@ use std::{collections::VecDeque, net::SocketAddr, time::Duration};
 use futures_util::StreamExt;
 use tokio::{
     sync::mpsc::{self, Receiver, Sender},
-    task::JoinHandle,
+    task::{AbortHandle, JoinHandle},
     time,
 };
 use tokio_stream::wrappers::IntervalStream;
@@ -16,7 +16,7 @@ const DEFAULT_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
 pub struct ActiveProxy {
     proxy: ClientProxy,
     server: SocketAddr,
-    liveness_handle: JoinHandle<()>,
+    liveness_handle: AbortHandle,
 }
 
 pub struct Manager {
@@ -146,13 +146,17 @@ impl Manager {
         actix_web::rt::spawn(async move { client_proxy.run_server(tx).await });
 
         if let Ok(proxy) = rx.await {
-            let liveness_handle = self.run_liveness_check(server, ollama, cmd_tx).await?;
+            let liveness_handle = self
+                .run_liveness_check(server, ollama, cmd_tx)
+                .await?
+                .abort_handle();
 
             self.active_proxy = Some(ActiveProxy {
                 proxy,
                 server,
                 liveness_handle,
             });
+
             info!("Registered an Ollana proxy for address {}", server);
         }
 
