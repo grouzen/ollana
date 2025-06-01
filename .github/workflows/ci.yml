@@ -4,7 +4,6 @@ on:
   push:
     branches: [ "**" ]
   pull_request:
-    branches: [ "**" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,8 +16,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - uses: moonrepo/setup-rust@v1
+      with:
+        components: rustfmt
+    - name: Check formatting
+      run: cargo fmt --all --check
+
+    - uses: moonrepo/setup-rust@v1
+      with:
+        bins: cargo-make
+        components: clippy
     - name: Run Clippy
-      run: cargo clippy --all-targets --all-features
+      run: cargo make lint
 
     - name: Build
       run: cargo build --verbose
