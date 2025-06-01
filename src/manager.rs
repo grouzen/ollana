@@ -95,7 +95,7 @@ impl Manager {
         }
 
         // Run and register a new active proxy for the first server in the queue
-        if let Some(next) = self.servers.get(0) {
+        if let Some(next) = self.servers.front() {
             let ollama = Self::ollama_for_server(*next)?;
             self.register_proxy(*next, ollama, cmd_tx).await?;
         }
@@ -119,7 +119,7 @@ impl Manager {
                     self.servers.push_back(server);
 
                     // Run and register a new active proxy if there is no running
-                    if let None = self.active_proxy {
+                    if self.active_proxy.is_none() {
                         self.register_proxy(server, ollama, cmd_tx).await?;
                     }
                 }
@@ -173,7 +173,7 @@ impl Manager {
         let cmd_tx = cmd_tx.clone();
 
         let handle = tokio::spawn(async move {
-            while let Some(_) = stream.next().await {
+            while stream.next().await.is_some() {
                 debug!("Executing liveness check for address {}", server);
 
                 match ollama.get_version().await {

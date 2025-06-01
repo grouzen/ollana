@@ -61,8 +61,8 @@ impl ClientDiscovery {
     async fn broadcast_periodically(&self, socket: &UdpSocket) -> anyhow::Result<()> {
         let mut stream = IntervalStream::new(time::interval(self.broadcast_interval));
 
-        while let Some(_) = stream.next().await {
-            if let Ok(len) = self.send(&socket).await {
+        while stream.next().await.is_some() {
+            if let Ok(len) = self.send(socket).await {
                 debug!("Client discovery sent {} bytes", len);
             }
         }
@@ -78,7 +78,7 @@ impl ClientDiscovery {
         let mut buf: [u8; 4] = [0u8; 4];
 
         loop {
-            if let Ok((len, addr)) = self.recv(&socket, &mut buf).await {
+            if let Ok((len, addr)) = self.recv(socket, &mut buf).await {
                 debug!("Client discovery received {} bytes from {}", len, addr);
 
                 let magic = u32::from_be_bytes(buf);

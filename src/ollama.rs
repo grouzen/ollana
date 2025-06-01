@@ -22,7 +22,7 @@ impl Default for Ollama {
 
         Self {
             client: reqwest::Client::default(),
-            url: url,
+            url,
         }
     }
 }
@@ -48,7 +48,7 @@ impl Ollama {
         let url = Url::parse(&url)?;
 
         Ok(Ollama {
-            url: url,
+            url,
             ..Default::default()
         })
     }
