@@ -39,7 +39,7 @@ impl Default for ClientProxy {
             client: reqwest::Client::default(),
             host: constants::OLLANA_CLIENT_PROXY_DEFAULT_ADDRESS.to_string(),
             port: constants::OLLANA_CLIENT_PROXY_DEFAULT_PORT,
-            server_url: server_url,
+            server_url,
             handle: None,
         }
     }
@@ -58,7 +58,7 @@ impl Default for ServerProxy {
             client: reqwest::Client::default(),
             host: constants::OLLANA_SERVER_PROXY_DEFAULT_ADDRESS.to_string(),
             port: constants::OLLANA_SERVER_PROXY_DEFAULT_PORT,
-            ollama_url: ollama_url,
+            ollama_url,
         }
     }
 }
@@ -78,7 +78,7 @@ impl ClientProxy {
         let server_url = Url::parse(&server_url)?;
 
         Ok(ClientProxy {
-            server_url: server_url,
+            server_url,
             ..Default::default()
         })
     }
@@ -100,7 +100,7 @@ impl ClientProxy {
         let handle = server.handle();
         self.handle = Some(handle);
 
-        if let Err(_) = tx.send(self.clone()) {
+        if tx.send(self.clone()).is_err() {
             error!("Couldn't send an updated client proxy");
         }
 
@@ -146,9 +146,8 @@ impl ClientProxy {
     }
 
     pub async fn stop(&self, graceful: bool) {
-        match &self.handle {
-            Some(handle) => handle.stop(graceful).await,
-            None => (),
+        if let Some(handle) = &self.handle {
+            handle.stop(graceful).await
         }
     }
 }
@@ -163,7 +162,7 @@ impl ServerProxy {
         let ollama_url = Url::parse(&ollama_url)?;
 
         Ok(ServerProxy {
-            ollama_url: ollama_url,
+            ollama_url,
             ..Default::default()
         })
     }
