@@ -1,3 +1,4 @@
+use env_logger::Env;
 use futures_util::TryFutureExt;
 use log::info;
 use ollana::{discovery::ServerDiscovery, manager::Manager, ollama::Ollama, proxy::ServerProxy};
@@ -6,7 +7,7 @@ use ollana::{discovery::ServerDiscovery, manager::Manager, ollama::Ollama, proxy
 async fn main() -> anyhow::Result<()> {
     let local_ollama = Ollama::default();
 
-    env_logger::init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
     info!("Starting Ollana...");
 
