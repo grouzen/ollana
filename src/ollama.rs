@@ -1,10 +1,11 @@
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 
 use serde::Deserialize;
 use url::Url;
 
-use crate::{constants, error::OllanaError};
+use crate::constants;
 
+#[derive(Clone)]
 pub struct Ollama {
     client: reqwest::Client,
     url: Url,
@@ -33,13 +34,18 @@ pub struct VersionResponse {
 }
 
 impl Ollama {
-    pub fn try_new(host: String, port: u16) -> crate::error::Result<Ollama> {
+    pub fn try_new(host: String, port: u16) -> anyhow::Result<Self> {
         let socket_addr = (host, port)
             .to_socket_addrs()?
             .next()
-            .ok_or_else(|| OllanaError::Other("Ollama address is invalid".to_string()))?;
+            .ok_or_else(|| anyhow::Error::msg("Ollama address is invalid".to_string()))?;
+
+        Self::from_socket_addr(socket_addr)
+    }
+
+    pub fn from_socket_addr(socket_addr: SocketAddr) -> anyhow::Result<Self> {
         let url = format!("http://{socket_addr}");
-        let url = Url::parse(&url).map_err(OllanaError::from)?;
+        let url = Url::parse(&url)?;
 
         Ok(Ollama {
             url: url,
@@ -47,17 +53,16 @@ impl Ollama {
         })
     }
 
-    pub async fn get_version(&self) -> crate::error::Result<VersionResponse> {
+    pub async fn get_version(&self) -> anyhow::Result<VersionResponse> {
         let mut uri = self.url.clone();
         uri.set_path("api/version");
 
         self.client
             .get(uri)
             .send()
-            .await
-            .map_err(OllanaError::from)?
+            .await?
             .json::<VersionResponse>()
             .await
-            .map_err(OllanaError::from)
+            .map_err(anyhow::Error::new)
     }
 }

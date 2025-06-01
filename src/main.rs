@@ -1,29 +1,42 @@
-use std::io;
-
+use futures_util::TryFutureExt;
 use log::info;
-use ollana::{client_proxy::ClientProxy, ollama::Ollama, server_proxy::ServerProxy};
+use ollana::{discovery::ServerDiscovery, manager::Manager, ollama::Ollama, proxy::ServerProxy};
 
 #[actix_web::main]
-async fn main() -> io::Result<()> {
+async fn main() -> anyhow::Result<()> {
+    let local_ollama = Ollama::default();
+
     env_logger::init();
 
     info!("Starting Ollana...");
-    // To run the proxy we need:
-    // 1. check if there is no ollama running on localhost:port where port is a default or configured ollama port
-    //    a. in such case, start ServerProxy
-    //    b. otherwise, start ClientProxy
-    // let client_proxy = ClientProxy::default();
-    let ollama = Ollama::default();
 
-    match detect_mode(ollama).await {
-        Mode::Server => {
-            info!("Running in Server Mode");
-            ServerProxy::default().run_server().await
-        }
-        Mode::Client => {
-            info!("Running in Client Mode");
-            ClientProxy::default().run_server().await
-        }
+    match detect_mode(local_ollama).await {
+        Mode::Server => run_server_mode().await,
+        Mode::Client => run_client_mode().await,
+    }
+}
+
+async fn run_server_mode() -> anyhow::Result<()> {
+    let server_proxy = ServerProxy::default();
+    let server_discovery = ServerDiscovery::default();
+
+    info!("Running in Server Mode");
+
+    tokio::select! {
+        val = tokio::signal::ctrl_c().map_err(anyhow::Error::new) => val,
+        val = server_proxy.run_server() => val,
+        val = server_discovery.run() => val,
+    }
+}
+
+async fn run_client_mode() -> anyhow::Result<()> {
+    let mut manager = Manager::default();
+
+    info!("Running in Client Mode");
+
+    tokio::select! {
+        val = tokio::signal::ctrl_c().map_err(anyhow::Error::new) => val,
+        val = manager.run() => val,
     }
 }
 

@@ -1,5 +1,5 @@
-pub mod client_proxy;
 pub mod constants;
-pub mod error;
+pub mod discovery;
+pub mod manager;
 pub mod ollama;
-pub mod server_proxy;
+pub mod proxy;
