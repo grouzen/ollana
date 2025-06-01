@@ -16,5 +16,4 @@ dependencies = [
     "format",
     "lint",
     "build",
-    "test"
 ]
