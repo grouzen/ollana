@@ -2,15 +2,16 @@ use clap::Parser;
 use env_logger::Env;
 use ollana::{args::Args, serve_app::ServeApp};
 
-#[actix_web::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    match Args::parse() {
+    let result = match Args::parse() {
         Args::Serve(args) => {
             let serve_app = ServeApp::from_args(args);
 
-            serve_app.run().await
+            serve_app.run()
         }
-    }
+    };
+
+    result
 }

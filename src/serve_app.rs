@@ -1,13 +1,15 @@
+use std::path::PathBuf;
+
 use crate::{
     args::ServeArgs, discovery::ServerDiscovery, manager::Manager, ollama::Ollama,
     proxy::ServerProxy,
 };
+use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
 use futures_util::TryFutureExt;
-use log::info;
+use log::{error, info};
 
 pub struct ServeApp {
     // https://www.man7.org/linux/man-pages/man7/daemon.7.html
-    #[allow(dead_code)]
     sysv_daemon: bool,
     local_ollama: Ollama,
 }
@@ -25,9 +27,36 @@ impl ServeApp {
         }
     }
 
-    pub async fn run(&self) -> anyhow::Result<()> {
+    pub fn run(&self) -> anyhow::Result<()> {
         info!("Starting Ollana...");
 
+        if self.sysv_daemon {
+            let user = User::by_name("ollana")?;
+            let group = Group::by_name("ollana")?;
+            let daemonizr = Daemonizr::new().work_dir(PathBuf::from("/var/lib/ollana"))?;
+            let daemonizr = daemonizr.umask(0o137)?;
+            let daemonizr = daemonizr
+                .pidfile(PathBuf::from("/run/ollana/ollana.pid"))
+                .as_user(user)
+                .as_group(group)
+                .stdout(Stdout::Redirect(PathBuf::from("/var/log/ollana/serve.log")))
+                .stderr(Stderr::Redirect(PathBuf::from("/var/log/ollana/serve.log")));
+
+            match daemonizr.spawn() {
+                Ok(_) => {
+                    info!("Running in daemon mode");
+                }
+                Err(error) => {
+                    error!("Failed to daemonize the application");
+                    return Err(anyhow::Error::new(error));
+                }
+            }
+        }
+
+        actix_web::rt::System::new().block_on(self.detect_mode_and_run())
+    }
+
+    async fn detect_mode_and_run(&self) -> anyhow::Result<()> {
         match self.detect_mode().await {
             Mode::Server => Self::run_server_mode().await,
             Mode::Client => Self::run_client_mode().await,

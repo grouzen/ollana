@@ -10,6 +10,11 @@ pub enum Args {
 
 #[derive(clap::Args)]
 pub struct ServeArgs {
-    #[arg(short = 'd', long, default_value_t = true, help = "Run in daemon mode")]
+    #[arg(
+        short = 'd',
+        long,
+        default_value_t = false,
+        help = "Run in daemon mode"
+    )]
     pub daemon: bool,
 }
