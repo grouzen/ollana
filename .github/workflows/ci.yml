@@ -68,7 +68,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build (without cross)
-        if: !matrix.use-cross
+        if: "!matrix.use-cross"
         run: cargo build --verbose --release --locked --target ${{ matrix.target }}
 
       - name: Build (cross)
