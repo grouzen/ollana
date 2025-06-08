@@ -499,7 +499,9 @@ dependencies = [
 
 [[package]]
 name = "daemonizr"
-version = "0.1.5"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4620a8335f5588bc2b48fccacaad099d6552443f25fc0885a1fc755e86cd9b2c"
 dependencies = [
  "nix",
 ]

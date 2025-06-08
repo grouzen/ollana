@@ -7,8 +7,7 @@ edition = "2021"
 actix-web = "4.9.0"
 anyhow = "1.0.98"
 clap = { version = "4.5.39", features = ["derive"] }
-# daemonizr = "0.1.5"
-daemonizr = {path = "/home/lamdness/repos/daemonizr"}
+daemonizr = "0.1.6"
 env_logger = "0.11.8"
 futures-util = "0.3.31"
 log = "0.4.27"
