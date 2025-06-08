@@ -9,13 +9,18 @@ env:
   GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
   CARGO_TERM_COLOR: always
 
-jobs:
+jobs: 
   lint:
     name: Lint
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
+
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - uses: moonrepo/setup-rust@v1
         with:
           components: rustfmt
@@ -56,7 +61,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
+        
       - name: Install cross
         if: matrix.use-cross
         uses: taiki-e/install-action@v2
