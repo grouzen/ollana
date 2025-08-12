@@ -7,6 +7,7 @@ use crate::{
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
 use futures_util::TryFutureExt;
 use log::{error, info};
+use tokio::signal::unix::{signal, SignalKind};
 
 pub struct ServeApp {
     // https://www.man7.org/linux/man-pages/man7/daemon.7.html
@@ -57,8 +58,21 @@ impl ServeApp {
 
         info!("Running in Server Mode");
 
+        // Prepare signal futures
+        #[cfg(unix)]
+        let mut sigterm = signal(SignalKind::terminate())?;
+
         tokio::select! {
-            val = tokio::signal::ctrl_c().map_err(anyhow::Error::new) => val,
+            // Cross-platform ctrl_c support
+            _ = tokio::signal::ctrl_c().map_err(anyhow::Error::new) => {
+                info!("Received Ctrl-c (SIGINT), shutting down Server Mode...");
+                Ok(())
+            },
+            // Unix: SIGTERM
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, shutting down Server Mode...");
+                Ok(())
+            }
             val = server_proxy.run_server() => val,
             val = server_discovery.run() => val,
         }
@@ -69,8 +83,21 @@ impl ServeApp {
 
         info!("Running in Client Mode");
 
+        // Prepare signal futures
+        #[cfg(unix)]
+        let mut sigterm = signal(SignalKind::terminate())?;
+
         tokio::select! {
-            val = tokio::signal::ctrl_c().map_err(anyhow::Error::new) => val,
+            // Cross-platform ctrl_c support
+            _ = tokio::signal::ctrl_c().map_err(anyhow::Error::new) => {
+                info!("Received Ctrl-c (SIGINT), shutting down Client Mode...");
+                Ok(())
+            },
+            // Unix: SIGTERM
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, shutting down Client Mode...");
+                Ok(())
+            }
             val = manager.run() => val,
         }
     }
