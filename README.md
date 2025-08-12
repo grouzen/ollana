@@ -26,6 +26,8 @@ ollana serve -d
 
 ![Architecture Overview](docs/architecture-overview.png)
 
+See also [architecture-overview.md](docs/architecture-overview.md) for more details.
+
 
 ## Contributing
 
