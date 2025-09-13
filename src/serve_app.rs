@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
     args::ServeArgs, discovery::ServerDiscovery, manager::Manager, ollama::Ollama,
@@ -12,6 +12,7 @@ use tokio::signal::unix::{signal, SignalKind};
 pub struct ServeApp {
     // https://www.man7.org/linux/man-pages/man7/daemon.7.html
     sysv_daemon: bool,
+    pid_file: Option<PathBuf>,
     local_ollama: Ollama,
 }
 
@@ -22,8 +23,13 @@ enum Mode {
 
 impl ServeApp {
     pub fn from_args(args: ServeArgs) -> Self {
+        if args.pid_file.is_some() && !args.daemon {
+            eprintln!("ERROR: --pid argument can only be used with --daemon (-d).");
+            std::process::exit(1);
+        }
         ServeApp {
             sysv_daemon: args.daemon,
+            pid_file: args.pid_file,
             local_ollama: Ollama::default(),
         }
     }
@@ -32,7 +38,12 @@ impl ServeApp {
         info!("Starting Ollana...");
 
         if self.sysv_daemon {
-            Self::daemonize()?;
+            let pid_path = self
+                .pid_file
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("/run/ollana.pid"));
+
+            Self::daemonize(&pid_path)?;
         }
 
         actix_web::rt::System::new().block_on(self.detect_mode_and_run())
@@ -59,7 +70,6 @@ impl ServeApp {
         info!("Running in Server Mode");
 
         // Prepare signal futures
-        #[cfg(unix)]
         let mut sigterm = signal(SignalKind::terminate())?;
 
         tokio::select! {
@@ -84,7 +94,6 @@ impl ServeApp {
         info!("Running in Client Mode");
 
         // Prepare signal futures
-        #[cfg(unix)]
         let mut sigterm = signal(SignalKind::terminate())?;
 
         tokio::select! {
@@ -102,13 +111,13 @@ impl ServeApp {
         }
     }
 
-    fn daemonize() -> anyhow::Result<()> {
+    fn daemonize(pid_path: &Path) -> anyhow::Result<()> {
         let user = User::by_name("ollana")?;
         let group = Group::by_name("ollana")?;
         let daemonizr = Daemonizr::new().work_dir(PathBuf::from("/var/lib/ollana"))?;
         let daemonizr = daemonizr.umask(0o137)?;
         let daemonizr = daemonizr
-            .pidfile(PathBuf::from("/run/ollana/ollana.pid"))
+            .pidfile(pid_path.to_path_buf())
             .as_user(user)
             .as_group(group)
             .stdout(Stdout::Redirect(PathBuf::from("/var/log/ollana/serve.log")))
