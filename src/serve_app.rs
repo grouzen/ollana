@@ -59,7 +59,6 @@ impl ServeApp {
         info!("Running in Server Mode");
 
         // Prepare signal futures
-        #[cfg(unix)]
         let mut sigterm = signal(SignalKind::terminate())?;
 
         tokio::select! {
@@ -84,7 +83,6 @@ impl ServeApp {
         info!("Running in Client Mode");
 
         // Prepare signal futures
-        #[cfg(unix)]
         let mut sigterm = signal(SignalKind::terminate())?;
 
         tokio::select! {
