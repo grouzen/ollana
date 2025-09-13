@@ -17,4 +17,11 @@ pub struct ServeArgs {
         help = "Run in daemon mode"
     )]
     pub daemon: bool,
+    #[arg(
+        long = "pid",
+        value_name = "PID_FILE",
+        help = "PID file path (only valid when --daemon is used)",
+        required = false
+    )]
+    pub pid_file: Option<std::path::PathBuf>,
 }
