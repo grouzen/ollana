@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 actix-web = "4.9.0"
+actix-cors = "0.7"
 anyhow = "1.0.98"
 clap = { version = "4.5.39", features = ["derive"] }
 daemonizr = "0.1.6"
