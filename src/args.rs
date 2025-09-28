@@ -28,9 +28,8 @@ pub struct ServeArgs {
     #[arg(
         long = "log-file",
         value_name = "LOG_FILE",
-        help = "Log file path (only valid when --daemon is used)",
-        required = false,
-        requires = "daemon"
+        help = "Log file path",
+        required = false
     )]
     pub log_file: Option<std::path::PathBuf>,
 }
