@@ -1,3 +1,4 @@
+use actix_cors::Cors;
 use actix_web::{dev::ServerHandle, error, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use futures_util::StreamExt as _;
 use log::error;
@@ -91,6 +92,7 @@ impl ClientProxy {
             App::new()
                 .app_data(web::Data::new(client.clone()))
                 .app_data(web::Data::new(server_url.clone()))
+                .wrap(Cors::permissive())
                 .default_service(web::to(Self::forward))
         })
         .bind((self.host.clone(), self.port))?
