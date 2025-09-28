@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::{
     args::ServeArgs, discovery::ServerDiscovery, manager::Manager, ollama::Ollama,
@@ -9,10 +9,14 @@ use futures_util::TryFutureExt;
 use log::{error, info};
 use tokio::signal::unix::{signal, SignalKind};
 
+const DEFAULT_LOG_FILE_PATH: &str = "/var/log/ollana/serve.log";
+const DEFAULT_PID_FILE_PATH: &str = "/run/ollana.pid";
+
 pub struct ServeApp {
     // https://www.man7.org/linux/man-pages/man7/daemon.7.html
     sysv_daemon: bool,
     pid_file: Option<PathBuf>,
+    log_file: Option<PathBuf>,
     local_ollama: Ollama,
 }
 
@@ -23,13 +27,10 @@ enum Mode {
 
 impl ServeApp {
     pub fn from_args(args: ServeArgs) -> Self {
-        if args.pid_file.is_some() && !args.daemon {
-            eprintln!("ERROR: --pid argument can only be used with --daemon (-d).");
-            std::process::exit(1);
-        }
         ServeApp {
             sysv_daemon: args.daemon,
             pid_file: args.pid_file,
+            log_file: args.log_file,
             local_ollama: Ollama::default(),
         }
     }
@@ -38,12 +39,7 @@ impl ServeApp {
         info!("Starting Ollana...");
 
         if self.sysv_daemon {
-            let pid_path = self
-                .pid_file
-                .clone()
-                .unwrap_or_else(|| PathBuf::from("/run/ollana.pid"));
-
-            Self::daemonize(&pid_path)?;
+            self.daemonize()?;
         }
 
         actix_web::rt::System::new().block_on(self.detect_mode_and_run())
@@ -111,17 +107,26 @@ impl ServeApp {
         }
     }
 
-    fn daemonize(pid_path: &Path) -> anyhow::Result<()> {
+    fn daemonize(&self) -> anyhow::Result<()> {
         let user = User::by_name("ollana")?;
         let group = Group::by_name("ollana")?;
         let daemonizr = Daemonizr::new().work_dir(PathBuf::from("/var/lib/ollana"))?;
         let daemonizr = daemonizr.umask(0o137)?;
+        let pid_path = self
+            .pid_file
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_PID_FILE_PATH));
+        let log_file = match &self.log_file {
+            Some(log_path) => log_path.clone(),
+            None => PathBuf::from(DEFAULT_LOG_FILE_PATH),
+        };
+
         let daemonizr = daemonizr
             .pidfile(pid_path.to_path_buf())
             .as_user(user)
             .as_group(group)
-            .stdout(Stdout::Redirect(PathBuf::from("/var/log/ollana/serve.log")))
-            .stderr(Stderr::Redirect(PathBuf::from("/var/log/ollana/serve.log")));
+            .stdout(Stdout::Redirect(log_file.clone()))
+            .stderr(Stderr::Redirect(log_file));
 
         daemonizr
             .spawn()
