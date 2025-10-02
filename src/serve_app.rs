@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     args::ServeArgs, discovery::ServerDiscovery, manager::Manager, ollama::Ollama,
@@ -17,7 +17,7 @@ pub struct ServeApp {
     sysv_daemon: bool,
     pid_file: Option<PathBuf>,
     log_file: Option<PathBuf>,
-    local_ollama: Ollama,
+    local_ollama: Arc<Ollama>,
 }
 
 enum Mode {
@@ -31,7 +31,7 @@ impl ServeApp {
             sysv_daemon: args.daemon,
             pid_file: args.pid_file,
             log_file: args.log_file,
-            local_ollama: Ollama::default(),
+            local_ollama: Arc::new(Ollama::default()),
         }
     }
 
@@ -47,7 +47,7 @@ impl ServeApp {
 
     async fn detect_mode_and_run(&self) -> anyhow::Result<()> {
         match self.detect_mode().await {
-            Mode::Server => Self::run_server_mode().await,
+            Mode::Server => self.run_server_mode().await,
             Mode::Client => Self::run_client_mode().await,
         }
     }
@@ -59,9 +59,9 @@ impl ServeApp {
         }
     }
 
-    async fn run_server_mode() -> anyhow::Result<()> {
+    async fn run_server_mode(&self) -> anyhow::Result<()> {
         let server_proxy = ServerProxy::default();
-        let server_discovery = ServerDiscovery::default();
+        let server_discovery = ServerDiscovery::new(self.local_ollama.clone());
 
         info!("Running in Server Mode");
 
@@ -116,10 +116,10 @@ impl ServeApp {
             .pid_file
             .clone()
             .unwrap_or_else(|| PathBuf::from(DEFAULT_PID_FILE_PATH));
-        let log_file = match &self.log_file {
-            Some(log_path) => log_path.clone(),
-            None => PathBuf::from(DEFAULT_LOG_FILE_PATH),
-        };
+        let log_file = self
+            .log_file
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_LOG_FILE_PATH));
 
         let daemonizr = daemonizr
             .pidfile(pid_path.to_path_buf())

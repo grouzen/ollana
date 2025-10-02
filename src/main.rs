@@ -14,8 +14,8 @@ fn main() -> anyhow::Result<()> {
             if let Some(log_file_path) = &args.log_file {
                 // Create the log file if it doesn't exist
                 let log_file = OpenOptions::new()
-                    .create(true) // создать, если не существует
-                    .append(true) // писать только в конец файла
+                    .create(true)
+                    .append(true)
                     .open(log_file_path)
                     .map_err(|e| anyhow::anyhow!("Failed to create/open log file: {}", e))?;
 

@@ -1,22 +1,29 @@
 use std::{
     io,
     net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
+    sync::Arc,
     time::Duration,
 };
 
 use futures_util::StreamExt;
 use log::{debug, error, info};
-use tokio::{net::UdpSocket, sync::mpsc::Sender, time};
+use tokio::{
+    net::UdpSocket,
+    sync::{mpsc::Sender, Mutex},
+    time,
+};
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
     constants::{self, OLLANA_SERVER_PROXY_DEFAULT_PORT},
     manager::ManagerCommand,
+    ollama::Ollama,
 };
 
 const PROTO_MAGIC_NUMBER: u32 = 0x4C414E41; // LANA
 const RANDOM_UDP_PORT: u16 = 0;
-const DEFAULT_BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
+const DEFAULT_CLIENT_BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
+const DEFAULT_SERVER_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct ClientDiscovery {
     server_port: u16,
@@ -25,13 +32,16 @@ pub struct ClientDiscovery {
 
 pub struct ServerDiscovery {
     port: u16,
+    local_ollama: Arc<Ollama>,
+    liveness_interval: std::time::Duration,
+    alive: Mutex<bool>,
 }
 
 impl Default for ClientDiscovery {
     fn default() -> Self {
         Self {
             server_port: constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
-            broadcast_interval: DEFAULT_BROADCAST_INTERVAL,
+            broadcast_interval: DEFAULT_CLIENT_BROADCAST_INTERVAL,
         }
     }
 }
@@ -40,6 +50,9 @@ impl Default for ServerDiscovery {
     fn default() -> Self {
         Self {
             port: constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
+            local_ollama: Arc::new(Ollama::default()),
+            liveness_interval: DEFAULT_SERVER_LIVENESS_INTERVAL,
+            alive: Mutex::new(true),
         }
     }
 }
@@ -125,26 +138,72 @@ impl ClientDiscovery {
 }
 
 impl ServerDiscovery {
+    pub fn new(local_ollama: Arc<Ollama>) -> Self {
+        Self {
+            local_ollama,
+            ..Default::default()
+        }
+    }
+
     pub async fn run(&self) -> anyhow::Result<()> {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, self.port)).await?;
         let local_addr = socket.local_addr()?;
-        let mut buf: [u8; 4] = [0u8; 4];
 
         info!("Running server discovery on {}...", local_addr);
 
+        tokio::select! {
+            val = self.handle_messages(&socket) => val,
+            val = self.run_liveness_check() => Ok(val),
+        }
+    }
+
+    async fn handle_messages(&self, socket: &UdpSocket) -> anyhow::Result<()> {
+        let mut buf: [u8; 4] = [0u8; 4];
+
         loop {
-            if let Ok((len, addr)) = self.recv(&socket, &mut buf).await {
-                debug!("Server discovery received {} bytes from {}", len, addr);
+            if let Ok((len, addr)) = self.recv(socket, &mut buf).await {
+                let alive = self.alive.lock().await;
 
-                let magic = u32::from_be_bytes(buf);
+                if *alive {
+                    debug!("Server discovery received {} bytes from {}", len, addr);
 
-                if magic == PROTO_MAGIC_NUMBER {
-                    if let Ok(len) = self.send(&socket, addr).await {
-                        debug!("Server discovery sent {} bytes to {}", len, addr);
+                    let magic = u32::from_be_bytes(buf);
+
+                    if magic == PROTO_MAGIC_NUMBER {
+                        if let Ok(len) = self.send(socket, addr).await {
+                            debug!("Server discovery sent {} bytes to {}", len, addr);
+                        }
+                    } else {
+                        let hex = format!("0X{:X}", magic);
+                        debug!("Server discovery skipped message: {}", hex);
                     }
-                } else {
-                    let hex = format!("0X{:X}", magic);
-                    debug!("Server discovery skipped message: {}", hex);
+                }
+            }
+        }
+    }
+
+    async fn run_liveness_check(&self) {
+        let mut stream = IntervalStream::new(time::interval(self.liveness_interval));
+
+        while stream.next().await.is_some() {
+            debug!("Executing liveness check for locally running Ollama");
+
+            let mut alive = self.alive.lock().await;
+
+            match self.local_ollama.get_version().await {
+                Ok(_) => {
+                    if !*alive {
+                        info!("Detected local Ollama is running, start responding to discovery messages");
+
+                        *alive = true;
+                    }
+                }
+                Err(_) => {
+                    if *alive {
+                        info!("Detected local Ollama is not running, stop responding to discovery messages");
+
+                        *alive = false;
+                    }
                 }
             }
         }
