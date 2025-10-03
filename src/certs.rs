@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use log::{debug, info};
+
 pub struct Certs {
     dir: PathBuf,
 }
@@ -51,10 +53,21 @@ impl Certs {
     ///
     fn gen_x509(&self, cert_path: &Path, signing_key_path: &Path) -> anyhow::Result<()> {
         if !self.dir.exists() {
+            debug!(
+                "Creating data local dir to store certificates: {}",
+                self.dir.as_path().to_string_lossy()
+            );
+
             std::fs::create_dir_all(self.dir.as_path())?;
         }
 
         if !(cert_path.exists() && signing_key_path.exists()) {
+            info!(
+                "Couldn't find an already existing X509 pem files, generating new: {}, {}",
+                cert_path.to_string_lossy(),
+                signing_key_path.to_string_lossy()
+            );
+
             let cert = rcgen::generate_simple_self_signed(vec!["*".into()])?;
 
             let cert_pem = cert.cert.pem();

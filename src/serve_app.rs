@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use crate::{
-    args::ServeArgs, discovery::ServerDiscovery, manager::Manager, ollama::Ollama,
+    args::ServeArgs, certs::Certs, discovery::ServerDiscovery, manager::Manager, ollama::Ollama,
     proxy::ServerProxy,
 };
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
@@ -18,6 +18,7 @@ pub struct ServeApp {
     pid_file: Option<PathBuf>,
     log_file: Option<PathBuf>,
     local_ollama: Arc<Ollama>,
+    certs: Certs,
 }
 
 enum Mode {
@@ -26,13 +27,16 @@ enum Mode {
 }
 
 impl ServeApp {
-    pub fn from_args(args: ServeArgs) -> Self {
-        ServeApp {
+    pub fn from_args(args: ServeArgs) -> anyhow::Result<Self> {
+        let certs = Certs::new()?;
+
+        Ok(ServeApp {
             sysv_daemon: args.daemon,
             pid_file: args.pid_file,
             log_file: args.log_file,
             local_ollama: Arc::new(Ollama::default()),
-        }
+            certs,
+        })
     }
 
     pub fn run(&self) -> anyhow::Result<()> {
@@ -48,7 +52,7 @@ impl ServeApp {
     async fn detect_mode_and_run(&self) -> anyhow::Result<()> {
         match self.detect_mode().await {
             Mode::Server => self.run_server_mode().await,
-            Mode::Client => Self::run_client_mode().await,
+            Mode::Client => self.run_client_mode().await,
         }
     }
 
@@ -64,6 +68,8 @@ impl ServeApp {
         let server_discovery = ServerDiscovery::new(self.local_ollama.clone());
 
         info!("Running in Server Mode");
+
+        self.certs.gen_server()?;
 
         // Prepare signal futures
         let mut sigterm = signal(SignalKind::terminate())?;
@@ -84,10 +90,12 @@ impl ServeApp {
         }
     }
 
-    async fn run_client_mode() -> anyhow::Result<()> {
+    async fn run_client_mode(&self) -> anyhow::Result<()> {
         let mut manager = Manager::default();
 
         info!("Running in Client Mode");
+
+        self.certs.gen_client()?;
 
         // Prepare signal futures
         let mut sigterm = signal(SignalKind::terminate())?;
