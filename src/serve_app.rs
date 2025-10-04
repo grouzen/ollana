@@ -70,6 +70,7 @@ impl ServeApp {
         info!("Running in Server Mode");
 
         self.certs.gen_server()?;
+        self.certs.gen_http_server()?;
 
         // Prepare signal futures
         let mut sigterm = signal(SignalKind::terminate())?;

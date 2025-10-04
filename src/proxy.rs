@@ -156,7 +156,7 @@ impl ServerProxy {
         let client = self.client.clone();
         let ollama_url = self.ollama_url.clone();
 
-        let (cert_file, key_file) = certs.get_server_files()?;
+        let (cert_file, key_file) = certs.get_http_server_files()?;
         let rustls_config = Self::rustls_config(cert_file, key_file)?;
 
         HttpServer::new(move || {
