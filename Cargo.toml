@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2021"
 
 [dependencies]
-actix-web = "4.9.0"
+actix-web = { version = "4.9.0", features = ["rustls-0_23"] }
 actix-cors = "0.7"
 anyhow = "1.0.98"
 clap = { version = "4.5.39", features = ["derive"] }
@@ -12,10 +12,12 @@ daemonizr = "0.1.6"
 env_logger = "0.11.8"
 futures-util = "0.3.31"
 log = "0.4.27"
-reqwest = { version = "0.12.12", default-features = false, features = ["stream", "json"] }
+reqwest = { version = "0.12.12", default-features = false, features = ["stream", "json", "rustls-tls"] }
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.43.0", features = ["macros", "sync"] }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 url = "2.5.4"
 rcgen = "0.14.5"
 dirs = "6.0.0"
+rustls = { version = "0.23.32", default-features = false, features = ["logging", "std", "tls12", "ring"] }
+rustls-pemfile = "2.2.0"

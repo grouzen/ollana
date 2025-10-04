@@ -194,7 +194,7 @@ impl Manager {
     }
 
     fn ollama_for_server(server: SocketAddr) -> anyhow::Result<Ollama> {
-        Ollama::from_socket_addr(server).inspect_err(|error| {
+        Ollama::from_socket_addr(server, true).inspect_err(|error| {
             error!(
                 "Couldn't create an Ollama instance for address {}: {}",
                 server, error

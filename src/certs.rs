@@ -1,4 +1,5 @@
 use std::{
+    fs::File,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
@@ -42,6 +43,13 @@ impl Certs {
         let signing_key_path = self.dir.join("server_key.pem");
 
         self.gen_x509(&cert_path, &signing_key_path)
+    }
+
+    pub fn get_server_files(&self) -> anyhow::Result<(File, File)> {
+        let cert_file = File::open(self.dir.join("server_cert.pem"))?;
+        let signing_key_file = File::open(self.dir.join("server_key.pem"))?;
+
+        Ok((cert_file, signing_key_file))
     }
 
     /// Generates an X.509 certificate and signing key if they do not already exist.

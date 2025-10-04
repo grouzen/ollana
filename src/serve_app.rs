@@ -85,7 +85,7 @@ impl ServeApp {
                 info!("Received SIGTERM, shutting down Server Mode...");
                 Ok(())
             }
-            val = server_proxy.run_server() => val,
+            val = server_proxy.run_server(&self.certs) => val,
             val = server_discovery.run() => val,
         }
     }
