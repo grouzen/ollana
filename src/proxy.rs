@@ -2,12 +2,12 @@ use actix_cors::Cors;
 use actix_web::{dev::ServerHandle, error, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use futures_util::StreamExt as _;
 use log::error;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::{fs::File, io::BufReader, net::SocketAddr};
 use tokio::sync::{mpsc, oneshot::Sender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use url::Url;
 
-use crate::constants;
+use crate::{certs::Certs, constants};
 
 pub const PROXY_DEFAULT_WORKERS_NUMBER: usize = 2;
 
@@ -30,14 +30,15 @@ pub struct ServerProxy {
 impl Default for ClientProxy {
     fn default() -> Self {
         let server_url = format!(
-            "http://{}:{}",
+            "https://{}:{}",
             constants::OLLANA_SERVER_PROXY_DEFAULT_ADDRESS,
             constants::OLLANA_SERVER_PROXY_DEFAULT_PORT
         );
         let server_url = Url::parse(&server_url).unwrap();
+        let client = reqwest::Client::default();
 
         Self {
-            client: reqwest::Client::default(),
+            client,
             host: constants::OLLANA_CLIENT_PROXY_DEFAULT_ADDRESS.to_string(),
             port: constants::OLLANA_CLIENT_PROXY_DEFAULT_PORT,
             server_url,
@@ -65,20 +66,16 @@ impl Default for ServerProxy {
 }
 
 impl ClientProxy {
-    pub fn try_new(server_host: String, server_port: u16) -> anyhow::Result<Self> {
-        let server_socket_addr = (server_host, server_port)
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| anyhow::Error::msg("Server proxy address is invalid".to_string()))?;
-
-        Self::from_server_socket_addr(server_socket_addr)
-    }
-
     pub fn from_server_socket_addr(server_socket_addr: SocketAddr) -> anyhow::Result<Self> {
-        let server_url = format!("http://{server_socket_addr}");
+        let server_url = format!("https://{server_socket_addr}");
         let server_url = Url::parse(&server_url)?;
+        let client = reqwest::ClientBuilder::new()
+            .use_rustls_tls()
+            .danger_accept_invalid_certs(true)
+            .build()?;
 
         Ok(ClientProxy {
+            client,
             server_url,
             ..Default::default()
         })
@@ -155,23 +152,12 @@ impl ClientProxy {
 }
 
 impl ServerProxy {
-    pub fn try_new(ollama_host: String, ollama_port: u16) -> anyhow::Result<Self> {
-        let server_socket_addr = (ollama_host, ollama_port)
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| anyhow::Error::msg("Ollama address is invalid".to_string()))?;
-        let ollama_url = format!("http://{server_socket_addr}");
-        let ollama_url = Url::parse(&ollama_url)?;
-
-        Ok(ServerProxy {
-            ollama_url,
-            ..Default::default()
-        })
-    }
-
-    pub async fn run_server(&self) -> anyhow::Result<()> {
+    pub async fn run_server(&self, certs: &Certs) -> anyhow::Result<()> {
         let client = self.client.clone();
         let ollama_url = self.ollama_url.clone();
+
+        let (cert_file, key_file) = certs.get_http_server_files()?;
+        let rustls_config = Self::rustls_config(cert_file, key_file)?;
 
         HttpServer::new(move || {
             App::new()
@@ -179,11 +165,28 @@ impl ServerProxy {
                 .app_data(web::Data::new(ollama_url.clone()))
                 .default_service(web::to(Self::forward))
         })
-        .bind((self.host.clone(), self.port))?
+        .bind_rustls_0_23((self.host.clone(), self.port), rustls_config)?
         .workers(PROXY_DEFAULT_WORKERS_NUMBER)
         .run()
         .await
         .map_err(anyhow::Error::new)
+    }
+
+    fn rustls_config(cert_file: File, key_file: File) -> anyhow::Result<rustls::ServerConfig> {
+        let cert_reader = &mut BufReader::new(cert_file);
+        let key_reader = &mut BufReader::new(key_file);
+
+        let tls_certs = rustls_pemfile::certs(cert_reader).collect::<Result<Vec<_>, _>>()?;
+        let mut tls_keys =
+            rustls_pemfile::pkcs8_private_keys(key_reader).collect::<Result<Vec<_>, _>>()?;
+
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                tls_certs,
+                rustls::pki_types::PrivateKeyDer::Pkcs8(tls_keys.remove(0)),
+            )
+            .map_err(anyhow::Error::from)
     }
 
     async fn forward(

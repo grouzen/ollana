@@ -1,4 +1,5 @@
 pub mod args;
+pub mod certs;
 pub mod constants;
 pub mod discovery;
 pub mod manager;

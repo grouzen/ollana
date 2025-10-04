@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
                 builder.init();
             }
 
-            let serve_app = ServeApp::from_args(args);
+            let serve_app = ServeApp::from_args(args)?;
 
             serve_app.run()
         }

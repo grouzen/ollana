@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 
 use serde::Deserialize;
 use url::Url;
@@ -19,11 +19,9 @@ impl Default for Ollama {
             constants::OLLAMA_DEFAULT_PORT
         );
         let url = Url::parse(&url).unwrap();
+        let client = reqwest::Client::default();
 
-        Self {
-            client: reqwest::Client::default(),
-            url,
-        }
+        Self { client, url }
     }
 }
 
@@ -34,23 +32,16 @@ pub struct VersionResponse {
 }
 
 impl Ollama {
-    pub fn try_new(host: String, port: u16) -> anyhow::Result<Self> {
-        let socket_addr = (host, port)
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| anyhow::Error::msg("Ollama address is invalid".to_string()))?;
-
-        Self::from_socket_addr(socket_addr)
-    }
-
-    pub fn from_socket_addr(socket_addr: SocketAddr) -> anyhow::Result<Self> {
-        let url = format!("http://{socket_addr}");
+    pub fn from_socket_addr(socket_addr: SocketAddr, secure: bool) -> anyhow::Result<Self> {
+        let url_schema = if secure { "https" } else { "http" };
+        let url = format!("{}://{}", url_schema, socket_addr);
         let url = Url::parse(&url)?;
+        let client = reqwest::ClientBuilder::new()
+            .use_rustls_tls()
+            .danger_accept_invalid_certs(true)
+            .build()?;
 
-        Ok(Ollama {
-            url,
-            ..Default::default()
-        })
+        Ok(Ollama { client, url })
     }
 
     pub async fn get_version(&self) -> anyhow::Result<VersionResponse> {
