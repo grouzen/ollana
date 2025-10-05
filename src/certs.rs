@@ -5,6 +5,7 @@ use std::{
 };
 
 use log::{debug, info};
+use rustls::pki_types::{pem::PemObject, PrivatePkcs8KeyDer};
 
 const CLIENT_CERT_PEM: &str = "client_cert.pem";
 const CLIENT_KEY_PEM: &str = "client_key.pem";
@@ -40,6 +41,10 @@ impl Certs {
         self.gen_x509(&cert_path, &signing_key_path)
     }
 
+    pub fn get_client_device_id(&self) -> anyhow::Result<String> {
+        self.get_device_id(CLIENT_KEY_PEM)
+    }
+
     /// Generates a server certificate and key.
     ///
     /// This function creates a server certificate and signing key, storing them in files named
@@ -50,6 +55,10 @@ impl Certs {
         let signing_key_path = self.dir.join(SERVER_KEY_PEM);
 
         self.gen_x509(&cert_path, &signing_key_path)
+    }
+
+    pub fn get_server_device_id(&self) -> anyhow::Result<String> {
+        self.get_device_id(SERVER_KEY_PEM)
     }
 
     /// Generates an HTTP server certificate and key.
@@ -124,5 +133,12 @@ impl Certs {
         }
 
         Ok(())
+    }
+
+    fn get_device_id(&self, key_file_path: &str) -> anyhow::Result<String> {
+        let signing_key_path = self.dir.join(key_file_path);
+        let der = PrivatePkcs8KeyDer::from_pem_file(signing_key_path)?;
+
+        Ok(sha256::digest(der.secret_pkcs8_der()))
     }
 }
