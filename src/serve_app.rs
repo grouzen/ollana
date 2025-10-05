@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     args::ServeArgs, certs::Certs, discovery::ServerDiscovery, manager::Manager, ollama::Ollama,
-    proxy::ServerProxy,
+    proxy::ServerProxy, Mode,
 };
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
 use futures_util::TryFutureExt;
@@ -18,18 +18,11 @@ pub struct ServeApp {
     pid_file: Option<PathBuf>,
     log_file: Option<PathBuf>,
     local_ollama: Arc<Ollama>,
-    certs: Certs,
-}
-
-enum Mode {
-    Client,
-    Server,
+    certs: Arc<Certs>,
 }
 
 impl ServeApp {
-    pub fn from_args(args: ServeArgs) -> anyhow::Result<Self> {
-        let certs = Certs::new()?;
-
+    pub fn from_args(args: ServeArgs, certs: Arc<Certs>) -> anyhow::Result<Self> {
         Ok(ServeApp {
             sysv_daemon: args.daemon,
             pid_file: args.pid_file,
@@ -69,7 +62,6 @@ impl ServeApp {
 
         info!("Running in Server Mode");
 
-        self.certs.gen_server()?;
         self.certs.gen_http_server()?;
 
         // Prepare signal futures
@@ -95,8 +87,6 @@ impl ServeApp {
         let mut manager = Manager::default();
 
         info!("Running in Client Mode");
-
-        self.certs.gen_client()?;
 
         // Prepare signal futures
         let mut sigterm = signal(SignalKind::terminate())?;

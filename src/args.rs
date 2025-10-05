@@ -5,7 +5,11 @@ use clap::Parser;
 #[command(bin_name = "ollana")]
 #[command(version, about)]
 pub enum Args {
+    /// Run the ollana server
     Serve(ServeArgs),
+    #[clap(subcommand)]
+    /// Manage devices
+    Device(DeviceCommands),
 }
 
 #[derive(clap::Args)]
@@ -32,4 +36,12 @@ pub struct ServeArgs {
         required = false
     )]
     pub log_file: Option<std::path::PathBuf>,
+}
+
+#[derive(clap::Subcommand)]
+pub enum DeviceCommands {
+    /// Show your device_id
+    Show,
+    /// Allow a given device_id
+    Allow { id: String },
 }

@@ -1,10 +1,17 @@
 use clap::Parser;
 use env_logger::{Builder, Env};
-use ollana::{args::Args, serve_app::ServeApp};
-use std::fs::OpenOptions;
+use ollana::{
+    args::{Args, DeviceCommands},
+    certs::Certs,
+    device::Device,
+    serve_app::ServeApp,
+};
+use std::{fs::OpenOptions, sync::Arc};
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let certs = Arc::new(Certs::new()?);
+    let device = Device::new(&certs)?;
 
     match args {
         Args::Serve(args) => {
@@ -27,9 +34,15 @@ fn main() -> anyhow::Result<()> {
                 builder.init();
             }
 
-            let serve_app = ServeApp::from_args(args)?;
+            let serve_app = ServeApp::from_args(args, certs)?;
 
             serve_app.run()
         }
+        Args::Device(DeviceCommands::Show) => {
+            println!("Device ID: {}", device.id);
+
+            Ok(())
+        }
+        Args::Device(DeviceCommands::Allow { .. }) => Ok(()),
     }
 }
