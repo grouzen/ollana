@@ -40,8 +40,12 @@ pub struct ServeArgs {
 
 #[derive(clap::Subcommand)]
 pub enum DeviceCommands {
-    /// Show your device_id
+    /// Show your Device ID
     Show,
-    /// Allow a given device_id
+    /// Show list of allowed Device IDs
+    List,
+    /// Allow a given Device ID
     Allow { id: String },
+    /// Disable a given Device ID
+    Disable { id: String },
 }

@@ -7,6 +7,8 @@ use std::{
 use log::{debug, info};
 use rustls::pki_types::{pem::PemObject, PrivatePkcs8KeyDer};
 
+use crate::get_local_dir;
+
 const DEVICE_CERT_PEM: &str = "device_cert.pem";
 const DEVICE_KEY_PEM: &str = "device_key.pem";
 const HTTP_SERVER_CERT_PEM: &str = "http_server_cert.pem";
@@ -18,11 +20,7 @@ pub struct Certs {
 
 impl Certs {
     pub fn new() -> anyhow::Result<Self> {
-        let dir = dirs::data_local_dir()
-            .map(|p| p.join("ollana"))
-            .ok_or(anyhow::Error::msg(
-                "Couldn't determine data local directory",
-            ))?;
+        let dir = get_local_dir()?;
 
         Ok(Self { dir })
     }
