@@ -11,9 +11,7 @@ use std::{fs::OpenOptions, sync::Arc};
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let certs = Arc::new(Certs::new()?);
-    let device = Device::new(&certs)?;
-
-    device.init_config()?;
+    let device = Arc::new(Device::new(&certs)?);
 
     match args {
         Args::Serve(args) => {
@@ -36,7 +34,7 @@ fn main() -> anyhow::Result<()> {
                 builder.init();
             }
 
-            let serve_app = ServeApp::from_args(args, certs)?;
+            let serve_app = ServeApp::from_args(args, certs, device)?;
 
             serve_app.run()
         }
@@ -46,17 +44,15 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Args::Device(DeviceCommands::List) => {
-            let allowed_device_ids = device.list_allowed_device_ids()?;
-
             println!("Allowed Device IDs:");
-            for id in allowed_device_ids {
+            for id in &device.allowed {
                 println!("{}", id);
             }
 
             Ok(())
         }
         Args::Device(DeviceCommands::Allow { id }) => {
-            let is_allowed = device.allow_device_id(id.clone())?;
+            let is_allowed = device.allow(id.clone())?;
 
             if is_allowed {
                 println!("Added Device ID: {}", id);
@@ -67,7 +63,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Args::Device(DeviceCommands::Disable { id }) => {
-            let is_disabled = device.disable_device_id(id.clone())?;
+            let is_disabled = device.disable(id.clone())?;
 
             if is_disabled {
                 println!("Removed Device ID: {}", id);

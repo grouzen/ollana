@@ -1,4 +1,8 @@
-use std::{fs::OpenOptions, io::Write, path::PathBuf};
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +12,7 @@ const DEVICE_CONFIG_TOML: &str = "device_allowed.toml";
 
 pub struct Device {
     pub id: String,
+    pub allowed: Vec<String>,
     dir: PathBuf,
 }
 
@@ -18,20 +23,23 @@ struct DeviceConfig {
 
 impl Device {
     pub fn new(certs: &Certs) -> anyhow::Result<Self> {
+        let dir = get_local_dir()?;
+
+        Self::init_config(&dir)?;
         certs.gen_device()?;
 
         let id = sha256::digest(certs.get_device_key_bytes()?);
-        let dir = get_local_dir()?;
+        let allowed = Self::load_allowed_device_ids(&dir)?;
 
-        Ok(Self { id, dir })
+        Ok(Self { id, allowed, dir })
     }
 
-    pub fn allow_device_id(&self, id: String) -> anyhow::Result<bool> {
-        let mut config = self.load_config()?;
+    pub fn allow(&self, id: String) -> anyhow::Result<bool> {
+        let mut config = Self::load_config(&self.dir)?;
 
         if !config.allowed.contains(&id) {
             config.allowed.push(id);
-            self.save_config(&config)?;
+            Self::save_config(&self.dir, &config)?;
 
             Ok(true)
         } else {
@@ -39,12 +47,12 @@ impl Device {
         }
     }
 
-    pub fn disable_device_id(&self, id: String) -> anyhow::Result<bool> {
-        let mut config = self.load_config()?;
+    pub fn disable(&self, id: String) -> anyhow::Result<bool> {
+        let mut config = Self::load_config(&self.dir)?;
 
         if config.allowed.contains(&id) {
             config.allowed.retain(|x| x != &id);
-            self.save_config(&config)?;
+            Self::save_config(&self.dir, &config)?;
 
             Ok(true)
         } else {
@@ -52,34 +60,38 @@ impl Device {
         }
     }
 
-    pub fn list_allowed_device_ids(&self) -> anyhow::Result<Vec<String>> {
-        let config = self.load_config()?;
+    pub fn is_allowed(&self, id: String) -> bool {
+        self.allowed.contains(&id)
+    }
+
+    fn load_allowed_device_ids(dir: &Path) -> anyhow::Result<Vec<String>> {
+        let config = Self::load_config(dir)?;
 
         Ok(config.allowed)
     }
 
-    pub fn init_config(&self) -> anyhow::Result<()> {
-        if !self.dir.join(DEVICE_CONFIG_TOML).as_path().exists() {
+    fn init_config(dir: &Path) -> anyhow::Result<()> {
+        if !dir.join(DEVICE_CONFIG_TOML).as_path().exists() {
             let config = DeviceConfig::default();
 
-            self.save_config(&config)?;
+            Self::save_config(dir, &config)?;
         }
 
         Ok(())
     }
 
-    fn load_config(&self) -> anyhow::Result<DeviceConfig> {
-        let toml_str = std::fs::read_to_string(self.dir.join(DEVICE_CONFIG_TOML))?;
+    fn load_config(dir: &Path) -> anyhow::Result<DeviceConfig> {
+        let toml_str = std::fs::read_to_string(dir.join(DEVICE_CONFIG_TOML))?;
 
         toml::from_str(&toml_str).map_err(anyhow::Error::from)
     }
 
-    fn save_config(&self, config: &DeviceConfig) -> anyhow::Result<()> {
+    fn save_config(dir: &Path, config: &DeviceConfig) -> anyhow::Result<()> {
         let mut config_file = OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
-            .open(self.dir.join(DEVICE_CONFIG_TOML))
+            .open(dir.join(DEVICE_CONFIG_TOML))
             .map_err(|e| anyhow::anyhow!("Failed to create/open a device config file: {}", e))?;
         let toml_str = toml::to_string_pretty(&config)?;
 

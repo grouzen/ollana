@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, net::SocketAddr, time::Duration};
+use std::{collections::VecDeque, net::SocketAddr, sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
 use tokio::{
@@ -8,7 +8,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::IntervalStream;
 
-use crate::{discovery::ClientDiscovery, ollama::Ollama, proxy::ClientProxy};
+use crate::{device::Device, discovery::ClientDiscovery, ollama::Ollama, proxy::ClientProxy};
 use log::{debug, error, info};
 
 const DEFAULT_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
@@ -23,6 +23,7 @@ pub struct Manager {
     servers: VecDeque<SocketAddr>,
     active_proxy: Option<ActiveProxy>,
     liveness_interval: std::time::Duration,
+    device: Arc<Device>,
 }
 
 pub enum ManagerCommand {
@@ -30,17 +31,16 @@ pub enum ManagerCommand {
     Remove(SocketAddr),
 }
 
-impl Default for Manager {
-    fn default() -> Self {
+impl Manager {
+    pub fn new(device: Arc<Device>) -> Self {
         Self {
             servers: VecDeque::new(),
             active_proxy: None,
             liveness_interval: DEFAULT_LIVENESS_INTERVAL,
+            device,
         }
     }
-}
 
-impl Manager {
     pub async fn run(&mut self) -> anyhow::Result<()> {
         let client_discovery = ClientDiscovery::default();
 
@@ -138,7 +138,7 @@ impl Manager {
         ollama: Ollama,
         cmd_tx: &Sender<ManagerCommand>,
     ) -> anyhow::Result<()> {
-        let mut client_proxy = ClientProxy::from_server_socket_addr(server)?;
+        let mut client_proxy = ClientProxy::from_server_socket_addr(server, self.device.clone())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         info!("Spawning an Ollana proxy for address {}", server);
