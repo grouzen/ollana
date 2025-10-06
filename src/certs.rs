@@ -37,6 +37,14 @@ impl Certs {
         self.gen_x509(&cert_path, &signing_key_path)
     }
 
+    /// Retrieves the device key bytes from the PEM file.
+    ///
+    /// This function reads the private PKCS#8 DER-encoded secret key from the PEM file located at `DEVICE_KEY_PEM`
+    /// within the configured directory. It returns a vector containing the DER-encoded key bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is any issue reading or parsing the PEM file.
     pub fn get_device_key_bytes(&self) -> anyhow::Result<Vec<u8>> {
         let signing_key_path = self.dir.join(DEVICE_KEY_PEM);
         let der = PrivatePkcs8KeyDer::from_pem_file(signing_key_path)?;

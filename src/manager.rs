@@ -8,7 +8,9 @@ use tokio::{
 };
 use tokio_stream::wrappers::IntervalStream;
 
-use crate::{device::Device, discovery::ClientDiscovery, ollama::Ollama, proxy::ClientProxy};
+use crate::{
+    device::Device, discovery::ClientDiscovery, ollama::Ollama, ollana::Ollana, proxy::ClientProxy,
+};
 use log::{debug, error, info};
 
 const DEFAULT_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
@@ -103,6 +105,26 @@ impl Manager {
         Ok(())
     }
 
+    /// Handles adding a new server to the manager.
+    ///
+    /// This method checks whether the provided `server` is already in the list of managed servers,
+    /// then proceeds to authenticate with the Ollama service at that address. If successful, it adds
+    /// the server to the end of the queue and registers a proxy if there isn't one currently active.
+    ///
+    /// # Arguments
+    /// * `self` - A mutable reference to the manager instance.
+    /// * `server` - The new server's socket address (`SocketAddr`).
+    /// * `cmd_tx` - A sender for sending commands to the manager (`&Sender<ManagerCommand>`).
+    ///
+    /// # Returns
+    /// This function returns an `anyhow::Result<()>`, indicating success or failure.
+    ///
+    /// # Errors
+    /// This method can return errors if any of the following occur:
+    /// - The provided server address is not authorized.
+    /// - There is an error in connecting to the Ollama service at the provided address.
+    /// - Other unexpected issues arise during execution.
+    ///
     async fn handle_add_server(
         &mut self,
         server: SocketAddr,
@@ -111,20 +133,33 @@ impl Manager {
         // Don't do anything for the already added server
         if !self.servers.contains(&server) {
             let ollama = Self::ollama_for_server(server)?;
+            let ollana = Ollana::new(server)?;
 
-            // Check if the server is proxying requests and has a running Ollama instance
-            match ollama.get_version().await {
-                Ok(_) => {
-                    // Add new server to the end of queue
-                    self.servers.push_back(server);
+            if let Some(auth_response) = ollana.check_authorization(self.device.id.clone()).await? {
+                let server_device_id = auth_response.device_id;
 
-                    // Run and register a new active proxy if there is no running
-                    if self.active_proxy.is_none() {
-                        self.register_proxy(server, ollama, cmd_tx).await?;
+                // Check if the server's device_id is allowed on the client
+                if self.device.is_allowed(server_device_id.clone()) {
+                    // Check if the server is proxying requests and has a running Ollama instance
+                    match ollama.get_version().await {
+                        Ok(_) => {
+                            // Add new server to the end of queue
+                            self.servers.push_back(server);
+
+                            // Run and register a new active proxy if there is no running
+                            if self.active_proxy.is_none() {
+                                self.register_proxy(server, ollama, cmd_tx).await?;
+                            }
+                        }
+                        Err(error) => {
+                            error!("Ollana server {} returned an error: {}", server, error);
+                        }
                     }
-                }
-                Err(error) => {
-                    error!("Ollana server {} returned an error: {}", server, error);
+                } else {
+                    debug!(
+                        "Ollana server is not allowed to be registered: {}",
+                        server_device_id
+                    );
                 }
             }
         }

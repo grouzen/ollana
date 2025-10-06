@@ -7,8 +7,11 @@ pub mod device;
 pub mod discovery;
 pub mod manager;
 pub mod ollama;
+pub mod ollana;
 pub mod proxy;
 pub mod serve_app;
+
+pub const HTTP_HEADER_OLLANA_DEVICE_ID: &str = "X-Ollana-Device-Id";
 
 pub enum Mode {
     Client,

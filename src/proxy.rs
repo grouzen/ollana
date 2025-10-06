@@ -1,5 +1,8 @@
 use actix_cors::Cors;
-use actix_web::{dev::ServerHandle, error, web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{
+    dev::ServerHandle, error, http::header::ContentType, web, App, Error, HttpRequest,
+    HttpResponse, HttpServer,
+};
 use futures_util::StreamExt as _;
 use log::{debug, error};
 use std::{fs::File, io::BufReader, net::SocketAddr, sync::Arc};
@@ -7,10 +10,12 @@ use tokio::sync::{mpsc, oneshot::Sender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use url::Url;
 
-use crate::{certs::Certs, constants, device::Device};
+use crate::{
+    certs::Certs, constants, device::Device, ollana::AuthorizationResponse,
+    HTTP_HEADER_OLLANA_DEVICE_ID,
+};
 
 pub const PROXY_DEFAULT_WORKERS_NUMBER: usize = 2;
-const HTTP_HEADER_OLLANA_DEVICE_ID: &str = "X-Ollana-Device-Id";
 
 #[derive(Clone)]
 pub struct ClientProxy {
@@ -157,6 +162,9 @@ impl ServerProxy {
                 .app_data(web::Data::new(client.clone()))
                 .app_data(web::Data::new(ollama_url.clone()))
                 .app_data(web::Data::new(device.clone()))
+                .service(
+                    web::scope("/ollana/api").route("/authorize", web::post().to(Self::authorize)),
+                )
                 .default_service(web::to(Self::forward))
         })
         .bind_rustls_0_23((self.host.clone(), self.port), rustls_config)?
@@ -197,6 +205,26 @@ impl ServerProxy {
         );
 
         is_ignored_uri_path || device_id.is_some_and(|id| device.is_allowed(id))
+    }
+
+    async fn authorize(
+        req: HttpRequest,
+        device: web::Data<Arc<Device>>,
+    ) -> Result<HttpResponse, actix_web::Error> {
+        let device = (**device).clone();
+
+        if Self::is_authorized(req.clone(), device.clone()) {
+            let payload = AuthorizationResponse::new(device.id.clone());
+            let body = serde_json::to_string(&payload)?;
+
+            Ok(HttpResponse::Ok()
+                .content_type(ContentType::json())
+                .body(body))
+        } else {
+            Ok(HttpResponse::Unauthorized()
+                .content_type("text/plan")
+                .body("Device is not authorized"))
+        }
     }
 
     async fn forward(
