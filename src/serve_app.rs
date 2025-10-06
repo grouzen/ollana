@@ -1,8 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use crate::{
-    args::ServeArgs, certs::Certs, discovery::ServerDiscovery, manager::Manager, ollama::Ollama,
-    proxy::ServerProxy,
+    args::ServeArgs, certs::Certs, device::Device, discovery::ServerDiscovery, manager::Manager,
+    ollama::Ollama, proxy::ServerProxy, Mode,
 };
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
 use futures_util::TryFutureExt;
@@ -18,24 +18,23 @@ pub struct ServeApp {
     pid_file: Option<PathBuf>,
     log_file: Option<PathBuf>,
     local_ollama: Arc<Ollama>,
-    certs: Certs,
-}
-
-enum Mode {
-    Client,
-    Server,
+    certs: Arc<Certs>,
+    device: Arc<Device>,
 }
 
 impl ServeApp {
-    pub fn from_args(args: ServeArgs) -> anyhow::Result<Self> {
-        let certs = Certs::new()?;
-
+    pub fn from_args(
+        args: ServeArgs,
+        certs: Arc<Certs>,
+        device: Arc<Device>,
+    ) -> anyhow::Result<Self> {
         Ok(ServeApp {
             sysv_daemon: args.daemon,
             pid_file: args.pid_file,
             log_file: args.log_file,
             local_ollama: Arc::new(Ollama::default()),
             certs,
+            device,
         })
     }
 
@@ -64,12 +63,11 @@ impl ServeApp {
     }
 
     async fn run_server_mode(&self) -> anyhow::Result<()> {
-        let server_proxy = ServerProxy::default();
+        let server_proxy = ServerProxy::new(self.device.clone());
         let server_discovery = ServerDiscovery::new(self.local_ollama.clone());
 
         info!("Running in Server Mode");
 
-        self.certs.gen_server()?;
         self.certs.gen_http_server()?;
 
         // Prepare signal futures
@@ -92,11 +90,9 @@ impl ServeApp {
     }
 
     async fn run_client_mode(&self) -> anyhow::Result<()> {
-        let mut manager = Manager::default();
+        let mut manager = Manager::new(self.device.clone());
 
         info!("Running in Client Mode");
-
-        self.certs.gen_client()?;
 
         // Prepare signal futures
         let mut sigterm = signal(SignalKind::terminate())?;
