@@ -35,6 +35,23 @@ impl Ollana {
         Ok(Self { client, url })
     }
 
+    /// Checks if a device is authorized to access Ollana API.
+    ///
+    /// This function sends an HTTP POST request to the `/ollana/api/authorize`
+    /// endpoint with the specified device ID. If the response status code is
+    /// `UNAUTHORIZED`, it logs the failure and returns `None`. Otherwise, it parses
+    /// the JSON response as an `AuthorizationResponse` and returns it wrapped in
+    /// `Some`.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id`: A `String` representing the unique identifier for a device.
+    ///
+    /// # Returns
+    ///
+    /// * An `anyhow::Result<Option<AuthorizationResponse>>` indicating success or failure,
+    ///   with an optional authorization response if the request is successful and authorized.
+    ///
     pub async fn check_authorization(
         &self,
         device_id: String,

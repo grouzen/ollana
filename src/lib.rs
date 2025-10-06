@@ -18,6 +18,20 @@ pub enum Mode {
     Server,
 }
 
+/// Returns the path to the local data directory used by Ollana.
+///
+/// This method attempts to determine the location of the application's local data directory using
+/// the `dirs` crate. If successful, it returns a `PathBuf` pointing to a subdirectory named
+/// "ollana" within this directory.
+///
+/// # Returns
+/// A `Result<PathBuf>` indicating success or failure:
+/// - Ok(PathBuf): The path to the local data directory for Ollana.
+/// - Err(anyhow::Error): An error if the local data directory cannot be determined.
+///
+/// # Errors
+/// This function can return an `anyhow::Error` if it fails to determine the data local directory.
+///
 fn get_local_dir() -> anyhow::Result<PathBuf> {
     dirs::data_local_dir()
         .map(|p| p.join("ollana"))
