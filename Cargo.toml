@@ -1,7 +1,11 @@
 [package]
 name = "ollana"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
+description = "Ollama over LAN - Auto-discover your Ollama server on your local network with hassle-free ease"
+license = "MIT"
+repository = "https://github.com/grouzen/ollana"
+authors = ["Michael Nedokushev <michael.nedokushev@gmail.com>"]
 
 [dependencies]
 actix-web = { version = "4.9.0", features = ["rustls-0_23"] }
