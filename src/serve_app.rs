@@ -23,11 +23,7 @@ pub struct ServeApp {
 }
 
 impl ServeApp {
-    pub fn from_args(
-        args: ServeArgs,
-        certs: Arc<Certs>,
-        device: Arc<Device>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(args: ServeArgs, certs: Arc<Certs>, device: Arc<Device>) -> anyhow::Result<Self> {
         Ok(ServeApp {
             sysv_daemon: args.daemon,
             pid_file: args.pid_file,
