@@ -32,7 +32,7 @@ pub struct VersionResponse {
 }
 
 impl Ollama {
-    pub fn from_socket_addr(socket_addr: SocketAddr, secure: bool) -> anyhow::Result<Self> {
+    pub fn new(socket_addr: SocketAddr, secure: bool) -> anyhow::Result<Self> {
         let url_schema = if secure { "https" } else { "http" };
         let url = format!("{}://{}", url_schema, socket_addr);
         let url = Url::parse(&url)?;

@@ -34,7 +34,7 @@ fn main() -> anyhow::Result<()> {
                 builder.init();
             }
 
-            let serve_app = ServeApp::from_args(args, certs, device)?;
+            let serve_app = ServeApp::new(args, certs, device)?;
 
             serve_app.run()
         }

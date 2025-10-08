@@ -99,6 +99,7 @@ impl Manager {
         // Run and register a new active proxy for the first server in the queue
         if let Some(next) = self.servers.front() {
             let ollama = Self::ollama_for_server(*next)?;
+
             self.register_proxy(*next, ollama, cmd_tx).await?;
         }
 
@@ -173,7 +174,7 @@ impl Manager {
         ollama: Ollama,
         cmd_tx: &Sender<ManagerCommand>,
     ) -> anyhow::Result<()> {
-        let mut client_proxy = ClientProxy::from_server_socket_addr(server, self.device.clone())?;
+        let mut client_proxy = ClientProxy::new(server, self.device.clone())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         info!("Spawning an Ollana proxy for address {}", server);
@@ -229,7 +230,7 @@ impl Manager {
     }
 
     fn ollama_for_server(server: SocketAddr) -> anyhow::Result<Ollama> {
-        Ollama::from_socket_addr(server, true).inspect_err(|error| {
+        Ollama::new(server, true).inspect_err(|error| {
             error!(
                 "Couldn't create an Ollama instance for address {}: {}",
                 server, error

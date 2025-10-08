@@ -36,10 +36,7 @@ pub struct ServerProxy {
 }
 
 impl ClientProxy {
-    pub fn from_server_socket_addr(
-        server_socket_addr: SocketAddr,
-        device: Arc<Device>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(server_socket_addr: SocketAddr, device: Arc<Device>) -> anyhow::Result<Self> {
         let server_url = format!("https://{server_socket_addr}");
         let server_url = Url::parse(&server_url)?;
         let client = reqwest::ClientBuilder::new()
@@ -196,7 +193,6 @@ impl ServerProxy {
             .headers()
             .get(HTTP_HEADER_OLLANA_DEVICE_ID)
             .and_then(|v| v.to_str().ok().map(String::from));
-        let is_ignored_uri_path = req.uri().path() == "/api/version";
 
         debug!(
             "Authorization decision: uri_path = {}, device_id = {:?}",
@@ -204,7 +200,7 @@ impl ServerProxy {
             device_id
         );
 
-        is_ignored_uri_path || device_id.is_some_and(|id| device.is_allowed(id))
+        device_id.is_some_and(|id| device.is_allowed(id))
     }
 
     async fn authorize(
@@ -235,7 +231,9 @@ impl ServerProxy {
         mut payload: web::Payload,
         method: actix_web::http::Method,
     ) -> Result<HttpResponse, Error> {
-        if Self::is_authorized(req.clone(), (**device).clone()) {
+        let is_ignored_uri_path = req.uri().path() == "/api/version";
+
+        if is_ignored_uri_path || Self::is_authorized(req.clone(), (**device).clone()) {
             let (tx, rx) = mpsc::unbounded_channel();
 
             actix_web::rt::spawn(async move {
