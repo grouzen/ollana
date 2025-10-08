@@ -15,10 +15,10 @@ Use your home or office Ollama server from any device on the same network withou
 
 ## :thinking: Why
 
-- No need to know an IP address of a Ollama server. 
-- No need to change the configuration of your client applications.
-- Secure the network traffic via TLS
-- Provide simple AuthZ/AuthN
+- **No need to specify the IP address of an Ollama server** - Automatically discovers Ollama servers on your local network using UDP broadcast.
+- **No need to modify your client application configuration** - Connect to a remote Ollama instance as if it were running locally.
+- **Secure the network traffic via TLS** - Network traffic is secured using TLS, employing self-signed X.509 certificates.
+- **Simple AuthZ and AuthN** - Unauthorized access is prevented through explicit bi-directional device management.
 
 ## Installation
 
@@ -70,7 +70,7 @@ You need to copy the Device IDs and allow them on both sides by running:
 
 ```sh
 $ ollana device allow b596c4e40002ec65f12edbe0adc116739dd52f62e7ed2a691230cd62c16aa4dc
-Added Device ID: 435ea545d8cd0287073e8fb672a451849d2a803c0cae321ba98c675951fe41de
+Added Device ID: b596c4e40002ec65f12edbe0adc116739dd52f62e7ed2a691230cd62c16aa4dc
 ```
 
 #### Device management
