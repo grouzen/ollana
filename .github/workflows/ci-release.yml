@@ -83,6 +83,12 @@ jobs:
             echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
           fi
 
+      - name: Publish to crates.io
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
+        run: cargo publish
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
