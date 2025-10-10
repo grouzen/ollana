@@ -62,12 +62,6 @@ jobs:
         if: matrix.use-cross
         run: cross build --release --locked --target ${{ matrix.target }}
 
-      - name: Publish to crates.io
-        shell: bash
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
-        run: cargo publish
-
       - name: Build archive
         shell: bash
         run: |
