@@ -1293,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "ollana"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "actix-cors",
  "actix-web",
