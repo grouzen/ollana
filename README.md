@@ -55,6 +55,8 @@ sudo emerge -av app-misc/ollana
 
 ### Allow devices
 
+![](/docs/demo/ollana-show-and-allow-device-github-dark.gif)
+
 First thing you need to do before running a proxy is to set up authorization between your Ollana server and client.
 This process requires approving the unique Device IDs for both the server and client on each end.
 
@@ -91,6 +93,11 @@ Removed Device ID: b596c4e40002ec65f12edbe0adc116739dd52f62e7ed2a691230cd62c16aa
 ```
 
 ### Serve
+
+![](/docs/demo/ollana-server-serve-github-dark.gif)
+
+![](/docs/demo/ollana-client-serve-github-dark.gif)
+
 
 Now you can run a proxy.
 It automatically detects the mode (client or server) to run in by checking whether an Ollama server is running on your machine.
