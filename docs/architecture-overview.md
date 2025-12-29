@@ -8,15 +8,19 @@ This document provides an overview of the Ollana system, which automatically dis
 
 Handles CLI startup, configuration parsing, and determines run mode (client or server) by checking for a local Ollama instance.
 
+#### CLI Options
+- `--force-server-mode`: Forces server mode regardless of Ollama availability. Useful for resolving boot order issues where Ollana starts before Ollama. When enabled, ServerDiscovery's built-in liveness checking will wait for Ollama to become available.
+
 #### Data Flow
 ```mermaid
 flowchart TD
     CLI["CLI Args"] --> ServeApp
     ServeApp --> ModeDetection
+    ModeDetection -->|Force Flag Set| ServerMode
     ModeDetection -->|Ollama Present| ServerMode
     ModeDetection -->|No Ollama| ClientMode
 ```
-**Description:** ServeApp receives command-line arguments, parses configuration, and inspects whether Ollama is active locally. It triggers either ServerMode or ClientMode logic accordingly.
+**Description:** ServeApp receives command-line arguments, parses configuration, and inspects whether Ollama is active locally. If `--force-server-mode` is specified, it bypasses detection and starts in server mode. Otherwise, it triggers either ServerMode or ClientMode logic based on Ollama availability.
 
 ---
 

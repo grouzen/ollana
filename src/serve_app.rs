@@ -6,7 +6,7 @@ use crate::{
 };
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
 use futures_util::TryFutureExt;
-use log::{error, info};
+use log::{error, info, warn};
 use tokio::signal::unix::{signal, SignalKind};
 
 const DEFAULT_LOG_FILE_PATH: &str = "/var/log/ollana/serve.log";
@@ -17,6 +17,7 @@ pub struct ServeApp {
     sysv_daemon: bool,
     pid_file: Option<PathBuf>,
     log_file: Option<PathBuf>,
+    force_server_mode: bool,
     local_ollama: Arc<Ollama>,
     certs: Arc<Certs>,
     device: Arc<Device>,
@@ -28,6 +29,7 @@ impl ServeApp {
             sysv_daemon: args.daemon,
             pid_file: args.pid_file,
             log_file: args.log_file,
+            force_server_mode: args.force_server_mode,
             local_ollama: Arc::new(Ollama::default()),
             certs,
             device,
@@ -52,6 +54,13 @@ impl ServeApp {
     }
 
     async fn detect_mode(&self) -> Mode {
+        if self.force_server_mode {
+            warn!("Force server mode is enabled. Ollama may not be available yet during boot.");
+            warn!("Requests may fail until Ollama is fully started. ServerDiscovery will handle this automatically.");
+
+            return Mode::Server;
+        }
+
         match self.local_ollama.get_version().await {
             Ok(_) => Mode::Server,
             Err(_) => Mode::Client,

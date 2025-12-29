@@ -36,6 +36,12 @@ pub struct ServeArgs {
         required = false
     )]
     pub log_file: Option<std::path::PathBuf>,
+    #[arg(
+        long = "force-server-mode",
+        default_value_t = false,
+        help = "Force server mode regardless of Ollama availability (useful for boot order issues)"
+    )]
+    pub force_server_mode: bool,
 }
 
 #[derive(clap::Subcommand)]
