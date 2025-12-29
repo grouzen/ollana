@@ -8,6 +8,7 @@ pub mod discovery;
 pub mod manager;
 pub mod ollama;
 pub mod ollana;
+pub mod provider;
 pub mod proxy;
 pub mod serve_app;
 

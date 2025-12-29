@@ -1298,6 +1298,7 @@ dependencies = [
  "actix-cors",
  "actix-web",
  "anyhow",
+ "async-trait",
  "clap",
  "daemonizr",
  "dirs",
