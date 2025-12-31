@@ -296,4 +296,93 @@ vllm_ports = "8000:8001"
 
         assert!(config.validate().is_err());
     }
+
+    #[test]
+    fn test_load_config_with_allowed_devices() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = r#"
+allowed_devices = [
+    "device_id_1",
+    "device_id_2",
+    "device_id_3"
+]
+"#;
+        create_config_file(temp_dir.path(), content).unwrap();
+
+        let config = Config::load(temp_dir.path()).unwrap();
+
+        assert!(config.allowed_devices.is_some());
+        let devices = config.allowed_devices.as_ref().unwrap();
+        assert_eq!(devices.len(), 3);
+        assert_eq!(devices[0], "device_id_1");
+        assert_eq!(devices[1], "device_id_2");
+        assert_eq!(devices[2], "device_id_3");
+    }
+
+    #[test]
+    fn test_load_config_with_empty_allowed_devices() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = r#"
+allowed_devices = []
+"#;
+        create_config_file(temp_dir.path(), content).unwrap();
+
+        let config = Config::load(temp_dir.path()).unwrap();
+
+        assert!(config.allowed_devices.is_some());
+        assert_eq!(config.allowed_devices.as_ref().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_load_config_without_allowed_devices() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = r#"
+allowed_providers = ["ollama"]
+"#;
+        create_config_file(temp_dir.path(), content).unwrap();
+
+        let config = Config::load(temp_dir.path()).unwrap();
+
+        assert!(config.allowed_devices.is_none());
+    }
+
+    #[test]
+    fn test_save_config_with_allowed_devices() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config {
+            allowed_devices: Some(vec!["device_1".to_string(), "device_2".to_string()]),
+            dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        config.save().unwrap();
+
+        // Reload and verify
+        let loaded_config = Config::load(temp_dir.path()).unwrap();
+        assert!(loaded_config.allowed_devices.is_some());
+        let devices = loaded_config.allowed_devices.as_ref().unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0], "device_1");
+        assert_eq!(devices[1], "device_2");
+    }
+
+    #[test]
+    fn test_allowed_devices_not_serialized_when_none() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config {
+            allowed_providers: Some(vec!["ollama".to_string()]),
+            dir: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        config.save().unwrap();
+
+        // Read the file content directly
+        let config_path = temp_dir.path().join(CONFIG_FILE_NAME);
+        let content = std::fs::read_to_string(&config_path).unwrap();
+
+        // Verify allowed_devices is not in the file when None
+        assert!(!content.contains("allowed_devices"));
+        assert!(content.contains("allowed_providers"));
+    }
 }
