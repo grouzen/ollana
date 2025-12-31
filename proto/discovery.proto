@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package ollana.discovery;
+
+// Enumeration of supported LLM provider types
+enum ProviderType {
+  PROVIDER_TYPE_UNSPECIFIED = 0;
+  PROVIDER_TYPE_OLLAMA = 1;
+  PROVIDER_TYPE_VLLM = 2;
+  PROVIDER_TYPE_LM_STUDIO = 3;
+  PROVIDER_TYPE_LLAMA_SERVER = 4;
+}
+
+// Information about a running provider instance
+message ProviderInfo {
+  ProviderType provider_type = 1;
+  uint32 port = 2;
+}
+
+// Client discovery request message
+message DiscoveryRequest {
+  repeated ProviderType allowed_providers = 1;
+}
+
+// Server discovery response message
+message DiscoveryResponse {
+  repeated ProviderInfo provider_info = 1;
+}
