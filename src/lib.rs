@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 pub mod args;
 pub mod certs;
+pub mod config;
 pub mod constants;
 pub mod device;
 pub mod discovery;
@@ -33,7 +34,7 @@ pub enum Mode {
 /// # Errors
 /// This function can return an `anyhow::Error` if it fails to determine the data local directory.
 ///
-fn get_local_dir() -> anyhow::Result<PathBuf> {
+pub fn get_local_dir() -> anyhow::Result<PathBuf> {
     dirs::data_local_dir()
         .map(|p| p.join("ollana"))
         .ok_or(anyhow::Error::msg(

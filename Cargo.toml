@@ -35,3 +35,6 @@ prost-types = "0.13"
 
 [build-dependencies]
 prost-build = "0.13"
+
+[dev-dependencies]
+tempfile = "3.8"

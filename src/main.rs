@@ -3,7 +3,9 @@ use env_logger::{Builder, Env};
 use ollana::{
     args::{Args, DeviceCommands},
     certs::Certs,
+    config::Config,
     device::Device,
+    get_local_dir,
     serve_app::ServeApp,
 };
 use std::{fs::OpenOptions, sync::Arc};
@@ -11,7 +13,9 @@ use std::{fs::OpenOptions, sync::Arc};
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let certs = Arc::new(Certs::new()?);
-    let device = Arc::new(Device::new(&certs)?);
+    let local_dir = get_local_dir()?;
+    let config = Config::load(&local_dir)?;
+    let device = Arc::new(Device::new(&certs, config)?);
 
     match args {
         Args::Serve(args) => {

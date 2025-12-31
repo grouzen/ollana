@@ -1,0 +1,58 @@
+# Ollana Configuration File
+# 
+# This file should be placed in your local data directory:
+# - Linux: ~/.local/share/ollana/config.toml
+# - macOS: ~/Library/Application Support/ollana/config.toml
+#
+# All settings are optional. CLI arguments take precedence over this file.
+
+# Comma-separated list of allowed provider types
+# Valid values: "ollama", "vllm", "lm-studio", "llama-server"
+# If not specified, all providers are allowed by default
+# allowed_providers = ["ollama", "vllm"]
+
+# Port mappings for each provider
+# Format: "<port1>:<port2>" where:
+#   - Server mode: port1 = LLM server port, port2 = Ollana server proxy port
+#   - Client mode: port1 = server proxy port to connect to, port2 = client proxy port
+# You can use partial formats:
+#   - "<port1>:" - specify only port1, port2 will be auto-assigned or use default
+#   - ":<port2>" - specify only port2, port1 will be taken from discovery or use default
+
+# Ollama port configuration
+# Default: 11434 (LLM) → 11435 (server proxy) / 127.0.0.1:11434 (client proxy)
+# ollama_ports = "11434:8888"
+
+# vLLM port configuration
+# Default: 8000 (LLM) → 8001 (server proxy) / 127.0.0.1:8000 (client proxy)
+# vllm_ports = "8000:8001"
+
+# LM Studio port configuration
+# Default: 1234 (LLM) → 1235 (server proxy) / 127.0.0.1:1234 (client proxy)
+# lmstudio_ports = "1234:1235"
+
+# llama.cpp server port configuration
+# Default: 8080 (LLM) → 8081 (server proxy) / 127.0.0.1:8080 (client proxy)
+# llama_server_ports = "8080:8081"
+
+# List of allowed device IDs (SHA-256 hashes of device certificates)
+# Use 'ollana device show' to get your device ID
+# Use 'ollana device allow <id>' to add devices
+# allowed_devices = [
+#   "b596c4e40002ec65f12edbe0adc116739dd52f62e7ed2a691230cd62c16aa4dc",
+#   "another_device_id_here"
+# ]
+
+# Example configurations:
+
+# Example 1: Only allow Ollama and vLLM
+# allowed_providers = ["ollama", "vllm"]
+# ollama_ports = "11434:8888"
+# vllm_ports = "8000:8001"
+
+# Example 2: Custom client proxy port for Ollama
+# ollama_ports = "8888:11435"
+
+# Example 3: Server with custom Ollama mapping
+# allowed_providers = ["ollama"]
+# ollama_ports = "11434:9000"

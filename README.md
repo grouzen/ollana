@@ -119,6 +119,31 @@ It also support an old-style SysV daemon mode to run in a background:
 $ ollana serve -d
 ```
 
+#### Configuration File
+
+Ollana supports configuration via a `config.toml` file in addition to CLI arguments. The configuration file should be placed in:
+- Linux: `~/.local/share/ollana/config.toml`
+- macOS: `~/Library/Application Support/ollana/config.toml`
+
+CLI arguments always take precedence over the configuration file. See `config.toml.example` for a full example with all available options.
+
+Example `config.toml`:
+```toml
+# Allow only specific providers
+allowed_providers = ["ollama", "vllm"]
+
+# Configure custom port mappings
+ollama_ports = "11434:8888"
+vllm_ports = "8000:8001"
+```
+
+The same configuration via CLI:
+```shell
+$ ollana serve --allowed-providers ollama,vllm --ollama-ports 11434:8888 --vllm-ports 8000:8001
+```
+
+For detailed documentation about configuration options, precedence rules, validation, and examples, see [docs/configuration.md](docs/configuration.md).
+
 #### Run as a system service
 
 It is recommended to run it as a background process. This repository doesn't contain scripts for any particular start up system.
