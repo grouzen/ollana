@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use async_trait::async_trait;
 use futures_util::StreamExt;
 use log::{debug, error, info};
 use prost::Message;
@@ -44,75 +45,217 @@ pub fn create_default_providers() -> HashMap<ProviderType, Arc<dyn Provider>> {
     providers
 }
 
-pub struct ClientDiscovery {
+/// Trait for abstracting network operations in ClientDiscovery.
+/// This allows for mocking network behavior in tests.
+#[async_trait]
+pub trait ClientDiscoveryNetwork: Send + Sync {
+    /// Send a discovery request to the broadcast address.
+    async fn send(&self, request: &DiscoveryRequest) -> io::Result<usize>;
+
+    /// Receive a discovery response from the network.
+    async fn recv(&self) -> io::Result<(DiscoveryResponse, SocketAddr)>;
+}
+
+/// Trait for abstracting network operations in ServerDiscovery.
+/// This allows for mocking network behavior in tests.
+#[async_trait]
+pub trait ServerDiscoveryNetwork: Send + Sync {
+    /// Receive a discovery request from the network.
+    async fn recv(&self) -> io::Result<(DiscoveryRequest, SocketAddr)>;
+
+    /// Send a discovery response to a specific address.
+    async fn send(&self, response: &DiscoveryResponse, addr: SocketAddr) -> io::Result<usize>;
+}
+
+/// UDP-based implementation of ClientDiscoveryNetwork.
+pub struct UdpClientDiscoveryNetwork {
+    socket: UdpSocket,
     server_port: u16,
+}
+
+impl UdpClientDiscoveryNetwork {
+    pub async fn new(server_port: u16) -> io::Result<Self> {
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, RANDOM_UDP_PORT)).await?;
+        socket.set_broadcast(true)?;
+        Ok(Self {
+            socket,
+            server_port,
+        })
+    }
+
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+}
+
+#[async_trait]
+impl ClientDiscoveryNetwork for UdpClientDiscoveryNetwork {
+    async fn send(&self, request: &DiscoveryRequest) -> io::Result<usize> {
+        let mut buf = Vec::with_capacity(DISCOVERY_BUFFER_SIZE);
+        request.encode(&mut buf).map_err(|e| {
+            error!("Failed to encode DiscoveryRequest: {}", e);
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?;
+
+        let len = self
+            .socket
+            .send_to(&buf, (Ipv4Addr::BROADCAST, self.server_port))
+            .await
+            .inspect_err(|error| error!("Client discovery error while sending: {}", error))?;
+
+        debug!("Client discovery sent {} bytes", len);
+
+        Ok(len)
+    }
+
+    async fn recv(&self) -> io::Result<(DiscoveryResponse, SocketAddr)> {
+        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
+        let (len, addr) = self
+            .socket
+            .recv_from(&mut buf)
+            .await
+            .inspect_err(|error| error!("Client discovery error while receiving: {}", error))?;
+
+        debug!("Client discovery received {} bytes from {}", len, addr);
+
+        let response = DiscoveryResponse::decode(&buf[..len]).map_err(|e| {
+            debug!("Client discovery failed to decode message: {}", e);
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?;
+
+        Ok((response, addr))
+    }
+}
+
+/// UDP-based implementation of ServerDiscoveryNetwork.
+pub struct UdpServerDiscoveryNetwork {
+    socket: UdpSocket,
+}
+
+impl UdpServerDiscoveryNetwork {
+    pub async fn new(port: u16) -> io::Result<Self> {
+        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
+        Ok(Self { socket })
+    }
+
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+}
+
+#[async_trait]
+impl ServerDiscoveryNetwork for UdpServerDiscoveryNetwork {
+    async fn recv(&self) -> io::Result<(DiscoveryRequest, SocketAddr)> {
+        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
+        let (len, addr) = self
+            .socket
+            .recv_from(&mut buf)
+            .await
+            .inspect_err(|error| error!("Server discovery error while receiving: {}", error))?;
+
+        debug!("Server discovery received {} bytes from {}", len, addr);
+
+        let request = DiscoveryRequest::decode(&buf[..len]).map_err(|e| {
+            debug!("Server discovery failed to decode message: {}", e);
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?;
+
+        Ok((request, addr))
+    }
+
+    async fn send(&self, response: &DiscoveryResponse, addr: SocketAddr) -> io::Result<usize> {
+        let mut buf = Vec::with_capacity(DISCOVERY_BUFFER_SIZE);
+        response.encode(&mut buf).map_err(|e| {
+            error!("Failed to encode DiscoveryResponse: {}", e);
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?;
+
+        let len = self
+            .socket
+            .send_to(&buf, addr)
+            .await
+            .inspect_err(|error| error!("Server discovery error while sending: {}", error))?;
+
+        debug!("Server discovery sent {} bytes to {}", len, addr);
+        Ok(len)
+    }
+}
+
+pub struct ClientDiscovery {
+    network: Arc<dyn ClientDiscoveryNetwork>,
     broadcast_interval: std::time::Duration,
     allowed_providers: Vec<ProviderType>,
 }
 
 pub struct ServerDiscovery {
-    port: u16,
+    network: Arc<dyn ServerDiscoveryNetwork>,
     providers: HashMap<ProviderType, Arc<dyn Provider>>,
     alive_providers: Arc<Mutex<HashMap<ProviderType, u16>>>,
     allowed_providers: Vec<ProviderType>,
     liveness_interval: std::time::Duration,
 }
 
-impl Default for ClientDiscovery {
-    fn default() -> Self {
-        Self {
-            server_port: constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
-            broadcast_interval: DEFAULT_CLIENT_BROADCAST_INTERVAL,
-            allowed_providers: DEFAULT_ALLOWED_PROVIDERS.to_vec(),
-        }
-    }
-}
-
-impl Default for ServerDiscovery {
-    fn default() -> Self {
-        let providers = create_default_providers();
-
-        Self {
-            port: constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
-            providers,
-            alive_providers: Arc::new(Mutex::new(HashMap::new())),
-            allowed_providers: DEFAULT_ALLOWED_PROVIDERS.to_vec(),
-            liveness_interval: DEFAULT_SERVER_LIVENESS_INTERVAL,
-        }
-    }
-}
-
 impl ClientDiscovery {
-    pub async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
-        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, RANDOM_UDP_PORT)).await?;
-        let local_addr = socket.local_addr()?;
-        socket.set_broadcast(true)?;
+    pub async fn new(
+        server_port: u16,
+        broadcast_interval: Duration,
+        allowed_providers: Vec<ProviderType>,
+    ) -> io::Result<Self> {
+        let network = UdpClientDiscoveryNetwork::new(server_port).await?;
+        
+        Ok(Self {
+            network: Arc::new(network),
+            broadcast_interval,
+            allowed_providers,
+        })
+    }
 
-        info!("Running client discovery on {}...", local_addr);
+    pub async fn with_defaults() -> io::Result<Self> {
+        Self::new(
+            constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
+            DEFAULT_CLIENT_BROADCAST_INTERVAL,
+            DEFAULT_ALLOWED_PROVIDERS.to_vec(),
+        )
+        .await
+    }
+
+    pub fn with_network(
+        network: Arc<dyn ClientDiscoveryNetwork>,
+        broadcast_interval: Duration,
+        allowed_providers: Vec<ProviderType>,
+    ) -> Self {
+        Self {
+            network,
+            broadcast_interval,
+            allowed_providers,
+        }
+    }
+
+    pub async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
+        info!("Running client discovery...");
 
         tokio::select! {
-            val = self.broadcast_periodically(&socket) => val,
-            val = self.handle_messages(&socket, cmd_tx) => val,
+            val = self.broadcast_periodically() => val,
+            val = self.handle_messages(cmd_tx) => val,
         }
     }
 
-    async fn broadcast_periodically(&self, socket: &UdpSocket) -> anyhow::Result<()> {
+    async fn broadcast_periodically(&self) -> anyhow::Result<()> {
         let mut stream = IntervalStream::new(time::interval(self.broadcast_interval));
 
         while stream.next().await.is_some() {
-            let _ = self.send(socket).await;
+            let request = DiscoveryRequest {
+                allowed_providers: self.allowed_providers.iter().map(|p| *p as i32).collect(),
+            };
+            let _ = self.network.send(&request).await;
         }
 
         Ok(())
     }
 
-    async fn handle_messages(
-        &self,
-        socket: &UdpSocket,
-        cmd_tx: &Sender<ManagerCommand>,
-    ) -> anyhow::Result<()> {
+    async fn handle_messages(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
         loop {
-            if let Ok((response, addr)) = self.recv(socket).await {
+            if let Ok((response, addr)) = self.network.recv().await {
                 debug!(
                     "Client discovery found a server with {} provider(s) at {}",
                     response.provider_info.len(),
@@ -140,73 +283,77 @@ impl ClientDiscovery {
             }
         }
     }
-
-    async fn send(&self, socket: &UdpSocket) -> io::Result<usize> {
-        let request = DiscoveryRequest {
-            allowed_providers: self.allowed_providers.iter().map(|p| *p as i32).collect(),
-        };
-
-        let mut buf = Vec::with_capacity(DISCOVERY_BUFFER_SIZE);
-        request.encode(&mut buf).map_err(|e| {
-            error!("Failed to encode DiscoveryRequest: {}", e);
-            io::Error::new(io::ErrorKind::InvalidData, e)
-        })?;
-
-        let len = socket
-            .send_to(&buf, (Ipv4Addr::BROADCAST, self.server_port))
-            .await
-            .inspect_err(|error| error!("Client discovery error while sending: {}", error))?;
-
-        debug!("Client discovery sent {} bytes", len);
-
-        Ok(len)
-    }
-
-    async fn recv(&self, socket: &UdpSocket) -> io::Result<(DiscoveryResponse, SocketAddr)> {
-        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
-        let (len, addr) = socket
-            .recv_from(&mut buf)
-            .await
-            .inspect_err(|error| error!("Client discovery error while receiving: {}", error))?;
-
-        debug!("Client discovery received {} bytes from {}", len, addr);
-
-        let response = DiscoveryResponse::decode(&buf[..len]).map_err(|e| {
-            debug!("Client discovery failed to decode message: {}", e);
-            io::Error::new(io::ErrorKind::InvalidData, e)
-        })?;
-
-        Ok((response, addr))
-    }
 }
 
 impl ServerDiscovery {
-    pub fn new(
+    pub async fn new(
+        port: u16,
         providers: HashMap<ProviderType, Arc<dyn Provider>>,
         allowed_providers: Vec<ProviderType>,
-    ) -> Self {
-        Self {
+        liveness_interval: Duration,
+    ) -> io::Result<Self> {
+        let network = UdpServerDiscoveryNetwork::new(port).await?;
+
+        Ok(Self {
+            network: Arc::new(network),
+            providers,
+            alive_providers: Arc::new(Mutex::new(HashMap::new())),
+            allowed_providers,
+            liveness_interval,
+        })
+    }
+
+    pub async fn with_defaults() -> io::Result<Self> {
+        let providers = create_default_providers();
+        Self::new(
+            constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
+            providers,
+            DEFAULT_ALLOWED_PROVIDERS.to_vec(),
+            DEFAULT_SERVER_LIVENESS_INTERVAL,
+        )
+        .await
+    }
+
+    pub async fn with_providers(
+        providers: HashMap<ProviderType, Arc<dyn Provider>>,
+        allowed_providers: Vec<ProviderType>,
+    ) -> io::Result<Self> {
+        Self::new(
+            constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
             providers,
             allowed_providers,
-            ..Default::default()
+            DEFAULT_SERVER_LIVENESS_INTERVAL,
+        )
+        .await
+    }
+
+    pub fn with_network(
+        network: Arc<dyn ServerDiscoveryNetwork>,
+        providers: HashMap<ProviderType, Arc<dyn Provider>>,
+        allowed_providers: Vec<ProviderType>,
+        liveness_interval: Duration,
+    ) -> Self {
+        Self {
+            network,
+            providers,
+            alive_providers: Arc::new(Mutex::new(HashMap::new())),
+            allowed_providers,
+            liveness_interval,
         }
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
-        let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, self.port)).await?;
-        let local_addr = socket.local_addr()?;
-
-        info!("Running server discovery on {}...", local_addr);
+        info!("Running server discovery...");
 
         tokio::select! {
-            val = self.handle_messages(&socket) => val,
+            val = self.handle_messages() => val,
             val = self.run_liveness_check() => Ok(val),
         }
     }
 
-    async fn handle_messages(&self, socket: &UdpSocket) -> anyhow::Result<()> {
+    async fn handle_messages(&self) -> anyhow::Result<()> {
         loop {
-            if let Ok((request, addr)) = self.recv(socket).await {
+            if let Ok((request, addr)) = self.network.recv().await {
                 debug!(
                     "Server discovery parsed request with {} allowed provider(s)",
                     request.allowed_providers.len()
@@ -221,8 +368,25 @@ impl ServerDiscovery {
                 });
 
                 if has_matching_providers {
+                    // Build response while holding lock
+                    let provider_info: Vec<ProviderInfo> = alive_providers
+                        .iter()
+                        .filter_map(|(provider_type, &port)| {
+                            let provider_type_i32 = *provider_type as i32;
+                            if request.allowed_providers.contains(&provider_type_i32) {
+                                Some(ProviderInfo {
+                                    provider_type: provider_type_i32,
+                                    port: port as u32,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    let response = DiscoveryResponse { provider_info };
                     drop(alive_providers); // Release lock before async send
-                    let _ = self.send(socket, addr, &request.allowed_providers).await;
+                    let _ = self.network.send(&response, addr).await;
                 }
             }
         }
@@ -261,63 +425,5 @@ impl ServerDiscovery {
                 }
             }
         }
-    }
-
-    async fn recv(&self, socket: &UdpSocket) -> io::Result<(DiscoveryRequest, SocketAddr)> {
-        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
-        let (len, addr) = socket
-            .recv_from(&mut buf)
-            .await
-            .inspect_err(|error| error!("Server discovery error while receiving: {}", error))?;
-
-        debug!("Server discovery received {} bytes from {}", len, addr);
-
-        let request = DiscoveryRequest::decode(&buf[..len]).map_err(|e| {
-            debug!("Server discovery failed to decode message: {}", e);
-            io::Error::new(io::ErrorKind::InvalidData, e)
-        })?;
-
-        Ok((request, addr))
-    }
-
-    async fn send(
-        &self,
-        socket: &UdpSocket,
-        addr: SocketAddr,
-        allowed_providers: &[i32],
-    ) -> io::Result<usize> {
-        let alive_providers = self.alive_providers.lock().await;
-
-        // Filter alive providers based on client's allowed_providers list
-        let provider_info: Vec<ProviderInfo> = alive_providers
-            .iter()
-            .filter_map(|(provider_type, &port)| {
-                let provider_type_i32 = *provider_type as i32;
-                if allowed_providers.contains(&provider_type_i32) {
-                    Some(ProviderInfo {
-                        provider_type: provider_type_i32,
-                        port: port as u32,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let response = DiscoveryResponse { provider_info };
-
-        let mut buf = Vec::with_capacity(DISCOVERY_BUFFER_SIZE);
-        response.encode(&mut buf).map_err(|e| {
-            error!("Failed to encode DiscoveryResponse: {}", e);
-            io::Error::new(io::ErrorKind::InvalidData, e)
-        })?;
-
-        let len = socket
-            .send_to(&buf, addr)
-            .await
-            .inspect_err(|error| error!("Server discovery error while sending: {}", error))?;
-
-        debug!("Server discovery sent {} bytes to {}", len, addr);
-        Ok(len)
     }
 }

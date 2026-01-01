@@ -44,7 +44,7 @@ impl Manager {
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        let client_discovery = ClientDiscovery::default();
+        let client_discovery = ClientDiscovery::with_defaults().await?;
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<ManagerCommand>(32);
 

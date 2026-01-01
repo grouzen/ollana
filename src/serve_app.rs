@@ -82,7 +82,8 @@ impl ServeApp {
         // Configure which providers to allow (currently all supported)
         let allowed_providers = DEFAULT_ALLOWED_PROVIDERS.to_vec();
 
-        let server_discovery = ServerDiscovery::new(providers, allowed_providers);
+        let server_discovery =
+            ServerDiscovery::with_providers(providers, allowed_providers).await?;
 
         info!("Running in Server Mode");
 
