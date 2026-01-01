@@ -9,7 +9,11 @@ use tokio::{
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
-    device::Device, discovery::ClientDiscovery, ollama::Ollama, ollana::Ollana, proxy::ClientProxy,
+    device::Device,
+    discovery::{ClientDiscovery, UdpClientDiscovery},
+    ollama::Ollama,
+    ollana::Ollana,
+    proxy::ClientProxy,
 };
 use log::{debug, error, info};
 
@@ -44,7 +48,7 @@ impl Manager {
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        let client_discovery = ClientDiscovery::with_defaults().await?;
+        let client_discovery = UdpClientDiscovery::with_defaults().await?;
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<ManagerCommand>(32);
 

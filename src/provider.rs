@@ -5,7 +5,7 @@ use url::Url;
 use crate::constants;
 
 #[async_trait::async_trait]
-pub trait Provider {
+pub trait Provider: Send + Sync {
     async fn health_check(&self) -> anyhow::Result<bool>;
 
     fn get_port(&self) -> u16;
@@ -62,7 +62,7 @@ impl<C: ProviderConfig> LLMServer<C> {
 }
 
 #[async_trait::async_trait]
-impl<C: ProviderConfig + Sync> Provider for LLMServer<C> {
+impl<C: ProviderConfig + Send + Sync> Provider for LLMServer<C> {
     async fn health_check(&self) -> anyhow::Result<bool> {
         let mut uri = self.url.clone();
         uri.set_path(C::health_check_path());

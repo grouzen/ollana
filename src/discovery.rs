@@ -181,13 +181,43 @@ impl ServerDiscoveryNetwork for UdpServerDiscoveryNetwork {
     }
 }
 
-pub struct ClientDiscovery {
+/// Trait for client-side discovery operations.
+/// This allows for different implementations of client discovery behavior.
+#[async_trait]
+pub trait ClientDiscovery: Send + Sync {
+    /// Run the client discovery process.
+    async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()>;
+
+    /// Periodically broadcast discovery requests to find servers.
+    async fn broadcast_periodically(&self) -> anyhow::Result<()>;
+
+    /// Handle incoming discovery responses from servers.
+    async fn handle_messages(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()>;
+}
+
+/// Trait for server-side discovery operations.
+/// This allows for different implementations of server discovery behavior.
+#[async_trait]
+pub trait ServerDiscovery: Send + Sync {
+    /// Run the server discovery process.
+    async fn run(&self) -> anyhow::Result<()>;
+
+    /// Handle incoming discovery requests from clients.
+    async fn handle_messages(&self) -> anyhow::Result<()>;
+
+    /// Periodically check the liveness of providers.
+    async fn run_liveness_check(&self);
+}
+
+/// UDP-based implementation of ClientDiscovery.
+pub struct UdpClientDiscovery {
     network: Arc<dyn ClientDiscoveryNetwork>,
     broadcast_interval: std::time::Duration,
     allowed_providers: Vec<ProviderType>,
 }
 
-pub struct ServerDiscovery {
+/// UDP-based implementation of ServerDiscovery.
+pub struct UdpServerDiscovery {
     network: Arc<dyn ServerDiscoveryNetwork>,
     providers: HashMap<ProviderType, Arc<dyn Provider>>,
     alive_providers: Arc<Mutex<HashMap<ProviderType, u16>>>,
@@ -195,7 +225,7 @@ pub struct ServerDiscovery {
     liveness_interval: std::time::Duration,
 }
 
-impl ClientDiscovery {
+impl UdpClientDiscovery {
     pub async fn new(
         server_port: u16,
         broadcast_interval: Duration,
@@ -230,8 +260,11 @@ impl ClientDiscovery {
             allowed_providers,
         }
     }
+}
 
-    pub async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
+#[async_trait]
+impl ClientDiscovery for UdpClientDiscovery {
+    async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
         info!("Running client discovery...");
 
         tokio::select! {
@@ -285,7 +318,7 @@ impl ClientDiscovery {
     }
 }
 
-impl ServerDiscovery {
+impl UdpServerDiscovery {
     pub async fn new(
         port: u16,
         providers: HashMap<ProviderType, Arc<dyn Provider>>,
@@ -341,8 +374,11 @@ impl ServerDiscovery {
             liveness_interval,
         }
     }
+}
 
-    pub async fn run(&self) -> anyhow::Result<()> {
+#[async_trait]
+impl ServerDiscovery for UdpServerDiscovery {
+    async fn run(&self) -> anyhow::Result<()> {
         info!("Running server discovery...");
 
         tokio::select! {
@@ -558,7 +594,7 @@ mod tests {
             server_addr,
         )]));
 
-        let client = ClientDiscovery::with_network(
+        let client = UdpClientDiscovery::with_network(
             mock_network,
             DEFAULT_CLIENT_BROADCAST_INTERVAL,
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
@@ -610,7 +646,7 @@ mod tests {
             server_addr,
         )]));
 
-        let client = ClientDiscovery::with_network(
+        let client = UdpClientDiscovery::with_network(
             mock_network,
             DEFAULT_CLIENT_BROADCAST_INTERVAL,
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
@@ -670,7 +706,7 @@ mod tests {
             (response1, server1_addr),
         ]));
 
-        let client = ClientDiscovery::with_network(
+        let client = UdpClientDiscovery::with_network(
             mock_network,
             DEFAULT_CLIENT_BROADCAST_INTERVAL,
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
@@ -726,7 +762,7 @@ mod tests {
             server_addr,
         )]));
 
-        let client = ClientDiscovery::with_network(
+        let client = UdpClientDiscovery::with_network(
             mock_network,
             DEFAULT_CLIENT_BROADCAST_INTERVAL,
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
@@ -786,12 +822,12 @@ mod tests {
         }
     }
 
-    /// Helper to create a ServerDiscovery with pre-populated alive providers
+    /// Helper to create a UdpServerDiscovery with pre-populated alive providers
     async fn create_server_discovery_with_alive_providers(
         mock_network: Arc<MockServerDiscoveryNetwork>,
         alive_providers: HashMap<ProviderType, u16>,
-    ) -> ServerDiscovery {
-        let server = ServerDiscovery::with_network(
+    ) -> UdpServerDiscovery {
+        let server = UdpServerDiscovery::with_network(
             mock_network,
             HashMap::new(), // providers not needed for handle_messages tests
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
@@ -1016,13 +1052,13 @@ mod tests {
         );
     }
 
-    /// Helper to create a ServerDiscovery with mock providers for liveness tests
+    /// Helper to create a UdpServerDiscovery with mock providers for liveness tests
     fn create_server_discovery_with_mock_providers(
         providers: HashMap<ProviderType, Arc<dyn Provider>>,
         allowed_providers: Vec<ProviderType>,
-    ) -> ServerDiscovery {
+    ) -> UdpServerDiscovery {
         let mock_network = Arc::new(MockServerDiscoveryNetwork::new(vec![]));
-        ServerDiscovery::with_network(
+        UdpServerDiscovery::with_network(
             mock_network,
             providers,
             allowed_providers,

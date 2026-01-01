@@ -4,7 +4,9 @@ use crate::{
     args::ServeArgs,
     certs::Certs,
     device::Device,
-    discovery::{create_default_providers, ServerDiscovery, DEFAULT_ALLOWED_PROVIDERS},
+    discovery::{
+        create_default_providers, ServerDiscovery, UdpServerDiscovery, DEFAULT_ALLOWED_PROVIDERS,
+    },
     manager::Manager,
     ollama::Ollama,
     proxy::ServerProxy,
@@ -83,7 +85,7 @@ impl ServeApp {
         let allowed_providers = DEFAULT_ALLOWED_PROVIDERS.to_vec();
 
         let server_discovery =
-            ServerDiscovery::with_providers(providers, allowed_providers).await?;
+            UdpServerDiscovery::with_providers(providers, allowed_providers).await?;
 
         info!("Running in Server Mode");
 
