@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io,
     net::{Ipv4Addr, SocketAddr, ToSocketAddrs},
     sync::Arc,
@@ -18,12 +19,10 @@ use tokio_stream::wrappers::IntervalStream;
 use crate::{
     constants,
     manager::ManagerCommand,
-    ollama::Ollama,
-    proto::{DiscoveryRequest, DiscoveryResponse, ProviderType},
+    provider::{LMStudio, LlamaServer, Ollama as OllamaProvider, Provider, VLLM},
+    proto::{DiscoveryRequest, DiscoveryResponse, ProviderInfo, ProviderType},
 };
 
-// Temporary: Keep for ServerDiscovery until it's refactored
-const PROTO_MAGIC_NUMBER: u32 = 0x4C414E41; // LANA
 const RANDOM_UDP_PORT: u16 = 0;
 const DEFAULT_CLIENT_BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_SERVER_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
@@ -37,9 +36,10 @@ pub struct ClientDiscovery {
 
 pub struct ServerDiscovery {
     port: u16,
-    local_ollama: Arc<Ollama>,
+    providers: HashMap<ProviderType, Arc<dyn Provider>>,
+    alive_providers: Arc<Mutex<HashMap<ProviderType, u16>>>,
+    allowed_providers: Vec<ProviderType>,
     liveness_interval: std::time::Duration,
-    alive: Mutex<bool>,
 }
 
 impl Default for ClientDiscovery {
@@ -59,11 +59,23 @@ impl Default for ClientDiscovery {
 
 impl Default for ServerDiscovery {
     fn default() -> Self {
+        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+        providers.insert(ProviderType::Ollama, Arc::new(OllamaProvider::default()));
+        providers.insert(ProviderType::Vllm, Arc::new(VLLM::default()));
+        providers.insert(ProviderType::LmStudio, Arc::new(LMStudio::default()));
+        providers.insert(ProviderType::LlamaServer, Arc::new(LlamaServer::default()));
+
         Self {
             port: constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
-            local_ollama: Arc::new(Ollama::default()),
+            providers,
+            alive_providers: Arc::new(Mutex::new(HashMap::new())),
+            allowed_providers: vec![
+                ProviderType::Ollama,
+                ProviderType::Vllm,
+                ProviderType::LmStudio,
+                ProviderType::LlamaServer,
+            ],
             liveness_interval: DEFAULT_SERVER_LIVENESS_INTERVAL,
-            alive: Mutex::new(true),
         }
     }
 }
@@ -166,9 +178,13 @@ impl ClientDiscovery {
 }
 
 impl ServerDiscovery {
-    pub fn new(local_ollama: Arc<Ollama>) -> Self {
+    pub fn new(
+        providers: HashMap<ProviderType, Arc<dyn Provider>>,
+        allowed_providers: Vec<ProviderType>,
+    ) -> Self {
         Self {
-            local_ollama,
+            providers,
+            allowed_providers,
             ..Default::default()
         }
     }
@@ -186,24 +202,34 @@ impl ServerDiscovery {
     }
 
     async fn handle_messages(&self, socket: &UdpSocket) -> anyhow::Result<()> {
-        let mut buf: [u8; 4] = [0u8; 4];
+        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
 
         loop {
             if let Ok((len, addr)) = self.recv(socket, &mut buf).await {
-                let alive = self.alive.lock().await;
+                debug!("Server discovery received {} bytes from {}", len, addr);
 
-                if *alive {
-                    debug!("Server discovery received {} bytes from {}", len, addr);
+                match DiscoveryRequest::decode(&buf[..len]) {
+                    Ok(request) => {
+                        debug!(
+                            "Server discovery parsed request with {} allowed provider(s)",
+                            request.allowed_providers.len()
+                        );
 
-                    let magic = u32::from_be_bytes(buf);
+                        // Only respond if we have alive providers that match the request
+                        let alive_providers = self.alive_providers.lock().await;
+                        let has_matching_providers = request
+                            .allowed_providers
+                            .iter()
+                            .any(|&p| alive_providers.contains_key(&ProviderType::try_from(p).unwrap_or(ProviderType::Unspecified)));
 
-                    if magic == PROTO_MAGIC_NUMBER {
-                        if let Ok(len) = self.send(socket, addr).await {
-                            debug!("Server discovery sent {} bytes to {}", len, addr);
+                        if has_matching_providers {
+                            if let Ok(len) = self.send(socket, addr, &request.allowed_providers).await {
+                                debug!("Server discovery sent {} bytes to {}", len, addr);
+                            }
                         }
-                    } else {
-                        let hex = format!("0X{:X}", magic);
-                        debug!("Server discovery skipped message: {}", hex);
+                    }
+                    Err(e) => {
+                        debug!("Server discovery failed to decode message: {}", e);
                     }
                 }
             }
@@ -214,39 +240,78 @@ impl ServerDiscovery {
         let mut stream = IntervalStream::new(time::interval(self.liveness_interval));
 
         while stream.next().await.is_some() {
-            debug!("Executing liveness check for locally running Ollama");
+            debug!("Executing liveness checks for all allowed providers");
 
-            let mut alive = self.alive.lock().await;
+            let mut alive_providers = self.alive_providers.lock().await;
 
-            match self.local_ollama.get_version().await {
-                Ok(_) => {
-                    if !*alive {
-                        info!("Detected local Ollama is running, start responding to discovery messages");
-
-                        *alive = true;
-                    }
-                }
-                Err(_) => {
-                    if *alive {
-                        info!("Detected local Ollama is not running, stop responding to discovery messages");
-
-                        *alive = false;
+            for provider_type in &self.allowed_providers {
+                if let Some(provider) = self.providers.get(provider_type) {
+                    match provider.health_check().await {
+                        Ok(true) => {
+                            let port = provider.get_port();
+                            if !alive_providers.contains_key(provider_type) {
+                                info!(
+                                    "Detected {:?} is running on port {}, will respond to discovery messages",
+                                    provider_type, port
+                                );
+                                alive_providers.insert(*provider_type, port);
+                            }
+                        }
+                        Ok(false) | Err(_) => {
+                            if let Some(port) = alive_providers.remove(provider_type) {
+                                info!(
+                                    "Detected {:?} on port {} is no longer running, will stop responding for this provider",
+                                    provider_type, port
+                                );
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    async fn recv(&self, socket: &UdpSocket, buf: &mut [u8; 4]) -> io::Result<(usize, SocketAddr)> {
+    async fn recv(&self, socket: &UdpSocket, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         socket
             .recv_from(buf)
             .await
             .inspect_err(|error| error!("Server discovery error while receiving: {}", error))
     }
 
-    async fn send(&self, socket: &UdpSocket, addr: SocketAddr) -> io::Result<usize> {
+    async fn send(
+        &self,
+        socket: &UdpSocket,
+        addr: SocketAddr,
+        allowed_providers: &[i32],
+    ) -> io::Result<usize> {
+        let alive_providers = self.alive_providers.lock().await;
+
+        // Filter alive providers based on client's allowed_providers list
+        let provider_info: Vec<ProviderInfo> = alive_providers
+            .iter()
+            .filter_map(|(provider_type, &port)| {
+                let provider_type_i32 = *provider_type as i32;
+                if allowed_providers.contains(&provider_type_i32) {
+                    Some(ProviderInfo {
+                        provider_type: provider_type_i32,
+                        port: port as u32,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let response = DiscoveryResponse { provider_info };
+
+        let mut buf = Vec::with_capacity(DISCOVERY_BUFFER_SIZE);
+        response.encode(&mut buf).map_err(|e| {
+            error!("Failed to encode DiscoveryResponse: {}", e);
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?;
+
         socket
-            .send_to(&PROTO_MAGIC_NUMBER.to_be_bytes(), addr)
+            .send_to(&buf, addr)
             .await
             .inspect_err(|error| error!("Server discovery error while sending: {}", error))
     }
