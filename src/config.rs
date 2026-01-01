@@ -10,9 +10,27 @@ use std::{
 /// Name of the configuration file
 const CONFIG_FILE_NAME: &str = "config.toml";
 
-/// Configuration that can be loaded from config.toml
+/// Trait for configuration management operations.
+/// Allows different implementations of configuration storage and validation.
+pub trait Config: Send + Sync {
+    /// Load configuration from a directory
+    fn load(dir: &Path) -> anyhow::Result<Self>
+    where
+        Self: Sized;
+
+    /// Save configuration
+    fn save(&self) -> anyhow::Result<()>;
+
+    /// Get allowed devices
+    fn get_allowed_devices(&self) -> Option<Vec<String>>;
+
+    /// Set allowed devices
+    fn set_allowed_devices(&mut self, devices: Option<Vec<String>>);
+}
+
+/// TOML-backed implementation of Config trait
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
+pub struct TomlConfig {
     /// Comma-separated list of allowed provider types
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_providers: Option<Vec<String>>,
@@ -42,45 +60,55 @@ pub struct Config {
     pub dir: PathBuf,
 }
 
-impl Config {
-    /// Load configuration from the config file in the given directory
+impl TomlConfig {
+    /// Validate the configuration
     ///
-    /// If the config file doesn't exist, returns a default (empty) configuration.
-    /// If the config file exists but cannot be parsed, returns an error.
-    pub fn load(dir: &Path) -> anyhow::Result<Self> {
-        let config_path = dir.join(CONFIG_FILE_NAME);
+    /// Checks for:
+    /// - Valid provider types
+    /// - Valid port mapping formats
+    /// - Port conflicts (same port used for multiple providers)
+    fn validate(&self) -> anyhow::Result<()> {
+        // Validate allowed providers
+        self.parse_allowed_providers()?;
 
-        if !config_path.exists() {
-            log::debug!(
-                "Config file not found at {}, using defaults",
-                config_path.display()
-            );
-            return Ok(Self {
-                dir: dir.to_path_buf(),
-                ..Default::default()
-            });
+        // Validate and collect port mappings
+        let port_mappings = self.parse_port_mappings()?;
+
+        // Check for port conflicts
+        let mut used_ports: HashMap<u16, Vec<String>> = HashMap::new();
+
+        for (provider_type, mapping) in &port_mappings {
+            let provider_name = provider_type.to_string();
+
+            // Check port1 (if present)
+            if let Some(port) = mapping.port1 {
+                used_ports
+                    .entry(port)
+                    .or_default()
+                    .push(format!("{} (port1)", provider_name));
+            }
+
+            // Check port2 (if present)
+            if let Some(port) = mapping.port2 {
+                used_ports
+                    .entry(port)
+                    .or_default()
+                    .push(format!("{} (port2)", provider_name));
+            }
         }
 
-        let toml_str = std::fs::read_to_string(&config_path).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to read config file at {}: {}",
-                config_path.display(),
-                e
-            )
-        })?;
+        // Report port conflicts
+        for (port, users) in used_ports {
+            if users.len() > 1 {
+                return Err(anyhow::anyhow!(
+                    "Port conflict: port {} is used by multiple providers: {}",
+                    port,
+                    users.join(", ")
+                ));
+            }
+        }
 
-        let config: Self = toml::from_str(&toml_str).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to parse config file at {}: {}",
-                config_path.display(),
-                e
-            )
-        })?;
-
-        Ok(Self {
-            dir: dir.to_path_buf(),
-            ..config
-        })
+        Ok(())
     }
 
     /// Parse allowed providers from string list
@@ -141,61 +169,72 @@ impl Config {
 
         Ok(mappings)
     }
+}
 
-    /// Validate the configuration
+impl Default for TomlConfig {
+    fn default() -> Self {
+        Self {
+            allowed_providers: None,
+            ollama_ports: None,
+            vllm_ports: None,
+            lmstudio_ports: None,
+            llama_server_ports: None,
+            allowed_devices: None,
+            dir: PathBuf::new(),
+        }
+    }
+}
+
+impl Config for TomlConfig {
+    /// Load configuration from the config file in the given directory
     ///
-    /// Checks for:
-    /// - Valid provider types
-    /// - Valid port mapping formats
-    /// - Port conflicts (same port used for multiple providers)
-    pub fn validate(&self) -> anyhow::Result<()> {
-        // Validate allowed providers
-        self.parse_allowed_providers()?;
+    /// If the config file doesn't exist, returns a default (empty) configuration.
+    /// If the config file exists but cannot be parsed, returns an error.
+    fn load(dir: &Path) -> anyhow::Result<Self> {
+        let config_path = dir.join(CONFIG_FILE_NAME);
 
-        // Validate and collect port mappings
-        let port_mappings = self.parse_port_mappings()?;
-
-        // Check for port conflicts
-        let mut used_ports: HashMap<u16, Vec<String>> = HashMap::new();
-
-        for (provider_type, mapping) in &port_mappings {
-            let provider_name = provider_type.to_string();
-
-            // Check port1 (if present)
-            if let Some(port) = mapping.port1 {
-                used_ports
-                    .entry(port)
-                    .or_default()
-                    .push(format!("{} (port1)", provider_name));
-            }
-
-            // Check port2 (if present)
-            if let Some(port) = mapping.port2 {
-                used_ports
-                    .entry(port)
-                    .or_default()
-                    .push(format!("{} (port2)", provider_name));
-            }
+        if !config_path.exists() {
+            log::debug!(
+                "Config file not found at {}, using defaults",
+                config_path.display()
+            );
+            return Ok(Self {
+                dir: dir.to_path_buf(),
+                ..Default::default()
+            });
         }
 
-        // Report port conflicts
-        for (port, users) in used_ports {
-            if users.len() > 1 {
-                return Err(anyhow::anyhow!(
-                    "Port conflict: port {} is used by multiple providers: {}",
-                    port,
-                    users.join(", ")
-                ));
-            }
-        }
+        let toml_str = std::fs::read_to_string(&config_path).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to read config file at {}: {}",
+                config_path.display(),
+                e
+            )
+        })?;
 
-        Ok(())
+        let mut config: Self = toml::from_str(&toml_str).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to parse config file at {}: {}",
+                config_path.display(),
+                e
+            )
+        })?;
+
+        config.dir = dir.to_path_buf();
+
+        // Validate the loaded configuration
+        config.validate()?;
+
+        Ok(config)
     }
 
     /// Save configuration to the config file
     ///
     /// Creates the config file if it doesn't exist.
-    pub fn save(&self) -> anyhow::Result<()> {
+    fn save(&self) -> anyhow::Result<()> {
+        // Validate before saving
+        self.validate()?;
+
         let config_path = self.dir.join(CONFIG_FILE_NAME);
         let mut config_file = OpenOptions::new()
             .create(true)
@@ -209,19 +248,15 @@ impl Config {
 
         Ok(())
     }
-}
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            allowed_providers: None,
-            ollama_ports: None,
-            vllm_ports: None,
-            lmstudio_ports: None,
-            llama_server_ports: None,
-            allowed_devices: None,
-            dir: PathBuf::new(),
-        }
+    /// Get allowed devices
+    fn get_allowed_devices(&self) -> Option<Vec<String>> {
+        self.allowed_devices.clone()
+    }
+
+    /// Set allowed devices
+    fn set_allowed_devices(&mut self, devices: Option<Vec<String>>) {
+        self.allowed_devices = devices;
     }
 }
 
@@ -241,10 +276,10 @@ mod tests {
     #[test]
     fn test_load_missing_config_returns_default() {
         let temp_dir = TempDir::new().unwrap();
-        let config = Config::load(temp_dir.path()).unwrap();
+        let config = TomlConfig::load(temp_dir.path()).unwrap();
 
-        assert!(config.allowed_providers.is_none());
-        assert!(config.ollama_ports.is_none());
+        assert!(config.allowed_devices.is_none());
+        assert_eq!(config.dir, temp_dir.path());
     }
 
     #[test]
@@ -257,44 +292,57 @@ vllm_ports = "8000:8001"
 "#;
         create_config_file(temp_dir.path(), content).unwrap();
 
-        let config = Config::load(temp_dir.path()).unwrap();
+        let config = TomlConfig::load(temp_dir.path()).unwrap();
 
+        // Access fields directly for validation tests
         assert_eq!(config.allowed_providers.as_ref().unwrap().len(), 2);
         assert_eq!(config.ollama_ports.as_deref(), Some("11434:8888"));
         assert_eq!(config.vllm_ports.as_deref(), Some("8000:8001"));
     }
 
     #[test]
-    fn test_validate_valid_config() {
-        let config = Config {
+    fn test_save_valid_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = TomlConfig {
             allowed_providers: Some(vec!["ollama".to_string(), "vllm".to_string()]),
             ollama_ports: Some("11434:8888".to_string()),
             vllm_ports: Some("8000:8001".to_string()),
+            dir: temp_dir.path().to_path_buf(),
             ..Default::default()
         };
 
-        assert!(config.validate().is_ok());
+        // Should succeed because config is valid
+        assert!(config.save().is_ok());
     }
 
     #[test]
-    fn test_validate_invalid_provider() {
-        let config = Config {
-            allowed_providers: Some(vec!["invalid_provider".to_string()]),
-            ..Default::default()
-        };
+    fn test_load_config_with_invalid_provider() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = r#"
+allowed_providers = ["invalid_provider"]
+"#;
+        create_config_file(temp_dir.path(), content).unwrap();
 
-        assert!(config.validate().is_err());
+        // Should fail during load due to invalid provider
+        let result = TomlConfig::load(temp_dir.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid provider"));
     }
 
     #[test]
-    fn test_validate_port_conflict() {
-        let config = Config {
+    fn test_save_config_with_port_conflict() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = TomlConfig {
             ollama_ports: Some("11434:8888".to_string()),
             vllm_ports: Some("8000:8888".to_string()), // Conflict on port 8888
+            dir: temp_dir.path().to_path_buf(),
             ..Default::default()
         };
 
-        assert!(config.validate().is_err());
+        // Should fail during save due to port conflict
+        let result = config.save();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Port conflict"));
     }
 
     #[test]
@@ -309,7 +357,7 @@ allowed_devices = [
 "#;
         create_config_file(temp_dir.path(), content).unwrap();
 
-        let config = Config::load(temp_dir.path()).unwrap();
+        let config = TomlConfig::load(temp_dir.path()).unwrap();
 
         assert!(config.allowed_devices.is_some());
         let devices = config.allowed_devices.as_ref().unwrap();
@@ -327,7 +375,7 @@ allowed_devices = []
 "#;
         create_config_file(temp_dir.path(), content).unwrap();
 
-        let config = Config::load(temp_dir.path()).unwrap();
+        let config = TomlConfig::load(temp_dir.path()).unwrap();
 
         assert!(config.allowed_devices.is_some());
         assert_eq!(config.allowed_devices.as_ref().unwrap().len(), 0);
@@ -341,7 +389,7 @@ allowed_providers = ["ollama"]
 "#;
         create_config_file(temp_dir.path(), content).unwrap();
 
-        let config = Config::load(temp_dir.path()).unwrap();
+        let config = TomlConfig::load(temp_dir.path()).unwrap();
 
         assert!(config.allowed_devices.is_none());
     }
@@ -349,7 +397,7 @@ allowed_providers = ["ollama"]
     #[test]
     fn test_save_config_with_allowed_devices() {
         let temp_dir = TempDir::new().unwrap();
-        let config = Config {
+        let config = TomlConfig {
             allowed_devices: Some(vec!["device_1".to_string(), "device_2".to_string()]),
             dir: temp_dir.path().to_path_buf(),
             ..Default::default()
@@ -358,7 +406,7 @@ allowed_providers = ["ollama"]
         config.save().unwrap();
 
         // Reload and verify
-        let loaded_config = Config::load(temp_dir.path()).unwrap();
+        let loaded_config = TomlConfig::load(temp_dir.path()).unwrap();
         assert!(loaded_config.allowed_devices.is_some());
         let devices = loaded_config.allowed_devices.as_ref().unwrap();
         assert_eq!(devices.len(), 2);
@@ -369,7 +417,7 @@ allowed_providers = ["ollama"]
     #[test]
     fn test_allowed_devices_not_serialized_when_none() {
         let temp_dir = TempDir::new().unwrap();
-        let config = Config {
+        let config = TomlConfig {
             allowed_providers: Some(vec!["ollama".to_string()]),
             dir: temp_dir.path().to_path_buf(),
             ..Default::default()

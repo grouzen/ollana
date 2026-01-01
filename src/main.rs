@@ -3,18 +3,21 @@ use env_logger::{Builder, Env};
 use ollana::{
     args::{Args, DeviceCommands},
     certs::Certs,
-    config::Config,
+    config::{Config, TomlConfig},
     device::{ConfigDevice, Device},
     get_local_dir,
     serve_app::ServeApp,
 };
-use std::{fs::OpenOptions, sync::Arc};
+use std::{
+    fs::OpenOptions,
+    sync::{Arc, Mutex},
+};
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let certs = Arc::new(Certs::new()?);
     let local_dir = get_local_dir()?;
-    let config = Arc::new(Config::load(&local_dir)?);
+    let config: Arc<Mutex<TomlConfig>> = Arc::new(Mutex::new(TomlConfig::load(&local_dir)?));
     let device = Arc::new(ConfigDevice::new(&certs, config.clone())?);
 
     match args {
@@ -49,7 +52,8 @@ fn main() -> anyhow::Result<()> {
         }
         Args::Device(DeviceCommands::List) => {
             println!("Allowed Device IDs:");
-            for id in config.allowed_devices.iter().flatten() {
+            let allowed_devices = config.lock().unwrap().get_allowed_devices();
+            for id in allowed_devices.iter().flatten() {
                 println!("{}", id);
             }
 
