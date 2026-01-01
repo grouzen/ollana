@@ -1,9 +1,10 @@
+use std::sync::Arc;
+
 use crate::{certs::Certs, config::Config};
 
 pub struct Device {
     pub id: String,
-    pub allowed: Vec<String>,
-    pub config: Config,
+    pub config: Arc<Config>,
 }
 
 impl Device {
@@ -22,17 +23,12 @@ impl Device {
     /// This function returns a new instance of the device wrapped in a `Result`.
     /// If any step fails, an error is returned with detailed information about what went wrong.
     ///
-    pub fn new(certs: &Certs, config: Config) -> anyhow::Result<Self> {
+    pub fn new(certs: &Certs, config: Arc<Config>) -> anyhow::Result<Self> {
         certs.gen_device()?;
 
         let id = sha256::digest(certs.get_device_key_bytes()?);
-        let allowed = config.allowed_devices.clone().unwrap_or_default();
 
-        Ok(Self {
-            id,
-            allowed,
-            config,
-        })
+        Ok(Self { id, config })
     }
 
     /// Allows a device with the specified ID.
@@ -44,7 +40,7 @@ impl Device {
     /// * `id`: The unique identifier of the device to allow.
     ///
     pub fn allow(&self, id: String) -> anyhow::Result<bool> {
-        let mut config = self.config.clone();
+        let mut config = (*self.config).clone();
         let allowed_devices = config.allowed_devices.get_or_insert_with(Vec::new);
         if !allowed_devices.contains(&id) {
             allowed_devices.push(id);
@@ -64,7 +60,7 @@ impl Device {
     /// * `id`: The unique identifier of the device to disable.
     ///
     pub fn disable(&self, id: String) -> anyhow::Result<bool> {
-        let mut config = self.config.clone();
+        let mut config = (*self.config).clone();
         if let Some(allowed_devices) = &mut config.allowed_devices {
             if allowed_devices.contains(&id) {
                 allowed_devices.retain(|x| x != &id);
@@ -83,6 +79,10 @@ impl Device {
     /// * `id`: The unique identifier of the device to check.
     ///
     pub fn is_allowed(&self, id: String) -> bool {
-        self.allowed.contains(&id)
+        self.config
+            .allowed_devices
+            .as_ref()
+            .map(|devices| devices.contains(&id))
+            .unwrap_or(false)
     }
 }

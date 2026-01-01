@@ -14,8 +14,8 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let certs = Arc::new(Certs::new()?);
     let local_dir = get_local_dir()?;
-    let config = Config::load(&local_dir)?;
-    let device = Arc::new(Device::new(&certs, config)?);
+    let config = Arc::new(Config::load(&local_dir)?);
+    let device = Arc::new(Device::new(&certs, config.clone())?);
 
     match args {
         Args::Serve(args) => {
@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
         }
         Args::Device(DeviceCommands::List) => {
             println!("Allowed Device IDs:");
-            for id in &device.allowed {
+            for id in config.allowed_devices.iter().flatten() {
                 println!("{}", id);
             }
 
