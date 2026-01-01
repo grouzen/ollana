@@ -179,6 +179,13 @@ pub struct ServeArgs {
     pub llama_server_ports: Option<PortMapping>,
 }
 
+const DEFAULT_ALLOWED_PROVIDERS: &[ProviderType] = &[
+    ProviderType::Ollama,
+    ProviderType::Vllm,
+    ProviderType::LmStudio,
+    ProviderType::LlamaServer,
+];
+
 impl ServeArgs {
     /// Get the port mapping for a specific provider type
     pub fn get_port_mapping(&self, provider_type: ProviderType) -> Option<&PortMapping> {
@@ -193,14 +200,9 @@ impl ServeArgs {
     /// Get all allowed provider types
     /// Returns all providers if none specified
     pub fn get_allowed_providers(&self) -> Vec<ProviderType> {
-        self.allowed_providers.clone().unwrap_or_else(|| {
-            vec![
-                ProviderType::Ollama,
-                ProviderType::Vllm,
-                ProviderType::LmStudio,
-                ProviderType::LlamaServer,
-            ]
-        })
+        self.allowed_providers
+            .clone()
+            .unwrap_or_else(|| DEFAULT_ALLOWED_PROVIDERS.to_vec())
     }
 
     /// Check if a provider type is allowed
