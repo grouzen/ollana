@@ -35,6 +35,15 @@ pub const DEFAULT_ALLOWED_PROVIDERS: &[ProviderType] = &[
     ProviderType::LlamaServer,
 ];
 
+pub fn create_default_providers() -> HashMap<ProviderType, Arc<dyn Provider>> {
+    let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+    providers.insert(ProviderType::Ollama, Arc::new(OllamaProvider::default()));
+    providers.insert(ProviderType::Vllm, Arc::new(VLLM::default()));
+    providers.insert(ProviderType::LmStudio, Arc::new(LMStudio::default()));
+    providers.insert(ProviderType::LlamaServer, Arc::new(LlamaServer::default()));
+    providers
+}
+
 pub struct ClientDiscovery {
     server_port: u16,
     broadcast_interval: std::time::Duration,
@@ -61,11 +70,7 @@ impl Default for ClientDiscovery {
 
 impl Default for ServerDiscovery {
     fn default() -> Self {
-        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
-        providers.insert(ProviderType::Ollama, Arc::new(OllamaProvider::default()));
-        providers.insert(ProviderType::Vllm, Arc::new(VLLM::default()));
-        providers.insert(ProviderType::LmStudio, Arc::new(LMStudio::default()));
-        providers.insert(ProviderType::LlamaServer, Arc::new(LlamaServer::default()));
+        let providers = create_default_providers();
 
         Self {
             port: constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,

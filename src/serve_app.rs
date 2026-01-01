@@ -1,14 +1,12 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     args::ServeArgs,
     certs::Certs,
     device::Device,
-    discovery::{ServerDiscovery, DEFAULT_ALLOWED_PROVIDERS},
+    discovery::{create_default_providers, ServerDiscovery, DEFAULT_ALLOWED_PROVIDERS},
     manager::Manager,
     ollama::Ollama,
-    proto::ProviderType,
-    provider::{LMStudio, LlamaServer, Ollama as OllamaProvider, Provider, VLLM},
     proxy::ServerProxy,
     Mode,
 };
@@ -79,11 +77,7 @@ impl ServeApp {
         let server_proxy = ServerProxy::new(self.device.clone());
 
         // Initialize providers for all supported provider types
-        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
-        providers.insert(ProviderType::Ollama, Arc::new(OllamaProvider::default()));
-        providers.insert(ProviderType::Vllm, Arc::new(VLLM::default()));
-        providers.insert(ProviderType::LmStudio, Arc::new(LMStudio::default()));
-        providers.insert(ProviderType::LlamaServer, Arc::new(LlamaServer::default()));
+        let providers = create_default_providers();
 
         // Configure which providers to allow (currently all supported)
         let allowed_providers = DEFAULT_ALLOWED_PROVIDERS.to_vec();
