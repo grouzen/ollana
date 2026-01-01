@@ -4,7 +4,7 @@ use ollana::{
     args::{Args, DeviceCommands},
     certs::Certs,
     config::Config,
-    device::Device,
+    device::{ConfigDevice, Device},
     get_local_dir,
     serve_app::ServeApp,
 };
@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
     let certs = Arc::new(Certs::new()?);
     let local_dir = get_local_dir()?;
     let config = Arc::new(Config::load(&local_dir)?);
-    let device = Arc::new(Device::new(&certs, config.clone())?);
+    let device = Arc::new(ConfigDevice::new(&certs, config.clone())?);
 
     match args {
         Args::Serve(args) => {

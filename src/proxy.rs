@@ -11,7 +11,10 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use url::Url;
 
 use crate::{
-    certs::Certs, constants, device::Device, ollana::AuthorizationResponse,
+    certs::Certs,
+    constants,
+    device::{ConfigDevice, Device},
+    ollana::AuthorizationResponse,
     HTTP_HEADER_OLLANA_DEVICE_ID,
 };
 
@@ -24,7 +27,7 @@ pub struct ClientProxy {
     port: u16,
     server_url: Url,
     handle: Option<ServerHandle>,
-    device: Arc<Device>,
+    device: Arc<ConfigDevice>,
 }
 
 pub struct ServerProxy {
@@ -32,11 +35,11 @@ pub struct ServerProxy {
     host: String,
     port: u16,
     ollama_url: Url,
-    device: Arc<Device>,
+    device: Arc<ConfigDevice>,
 }
 
 impl ClientProxy {
-    pub fn new(server_socket_addr: SocketAddr, device: Arc<Device>) -> anyhow::Result<Self> {
+    pub fn new(server_socket_addr: SocketAddr, device: Arc<ConfigDevice>) -> anyhow::Result<Self> {
         let server_url = format!("https://{server_socket_addr}");
         let server_url = Url::parse(&server_url)?;
         let client = reqwest::ClientBuilder::new()
@@ -85,7 +88,7 @@ impl ClientProxy {
         req: HttpRequest,
         client: web::Data<reqwest::Client>,
         server_url: web::Data<Url>,
-        device: web::Data<Arc<Device>>,
+        device: web::Data<Arc<ConfigDevice>>,
         mut payload: web::Payload,
         method: actix_web::http::Method,
     ) -> Result<HttpResponse, actix_web::Error> {
@@ -129,7 +132,7 @@ impl ClientProxy {
 }
 
 impl ServerProxy {
-    pub fn new(device: Arc<Device>) -> Self {
+    pub fn new(device: Arc<ConfigDevice>) -> Self {
         let ollama_url = format!(
             "http://{}:{}",
             constants::OLLAMA_DEFAULT_ADDRESS,
@@ -188,7 +191,7 @@ impl ServerProxy {
             .map_err(anyhow::Error::from)
     }
 
-    fn is_authorized(req: HttpRequest, device: Arc<Device>) -> bool {
+    fn is_authorized(req: HttpRequest, device: Arc<ConfigDevice>) -> bool {
         let device_id = req
             .headers()
             .get(HTTP_HEADER_OLLANA_DEVICE_ID)
@@ -205,7 +208,7 @@ impl ServerProxy {
 
     async fn authorize(
         req: HttpRequest,
-        device: web::Data<Arc<Device>>,
+        device: web::Data<Arc<ConfigDevice>>,
     ) -> Result<HttpResponse, actix_web::Error> {
         let device = (**device).clone();
 
@@ -227,7 +230,7 @@ impl ServerProxy {
         req: HttpRequest,
         client: web::Data<reqwest::Client>,
         ollama_url: web::Data<Url>,
-        device: web::Data<Arc<Device>>,
+        device: web::Data<Arc<ConfigDevice>>,
         mut payload: web::Payload,
         method: actix_web::http::Method,
     ) -> Result<HttpResponse, Error> {

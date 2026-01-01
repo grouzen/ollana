@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     args::ServeArgs,
     certs::Certs,
-    device::Device,
+    device::ConfigDevice,
     discovery::{
         create_default_providers, ServerDiscovery, UdpServerDiscovery, DEFAULT_ALLOWED_PROVIDERS,
     },
@@ -28,11 +28,15 @@ pub struct ServeApp {
     force_server_mode: bool,
     local_ollama: Arc<Ollama>,
     certs: Arc<Certs>,
-    device: Arc<Device>,
+    device: Arc<ConfigDevice>,
 }
 
 impl ServeApp {
-    pub fn new(args: ServeArgs, certs: Arc<Certs>, device: Arc<Device>) -> anyhow::Result<Self> {
+    pub fn new(
+        args: ServeArgs,
+        certs: Arc<Certs>,
+        device: Arc<ConfigDevice>,
+    ) -> anyhow::Result<Self> {
         Ok(ServeApp {
             sysv_daemon: args.daemon,
             pid_file: args.pid_file,

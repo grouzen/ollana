@@ -9,7 +9,7 @@ use tokio::{
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
-    device::Device,
+    device::{ConfigDevice, Device},
     discovery::{ClientDiscovery, UdpClientDiscovery},
     ollama::Ollama,
     ollana::Ollana,
@@ -29,7 +29,7 @@ pub struct Manager {
     servers: VecDeque<SocketAddr>,
     active_proxy: Option<ActiveProxy>,
     liveness_interval: std::time::Duration,
-    device: Arc<Device>,
+    device: Arc<ConfigDevice>,
 }
 
 pub enum ManagerCommand {
@@ -38,7 +38,7 @@ pub enum ManagerCommand {
 }
 
 impl Manager {
-    pub fn new(device: Arc<Device>) -> Self {
+    pub fn new(device: Arc<ConfigDevice>) -> Self {
         Self {
             servers: VecDeque::new(),
             active_proxy: None,
