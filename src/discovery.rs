@@ -468,7 +468,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_messages_single_provider() {
+    async fn test_client_handle_messages_single_provider() {
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
         let provider_port = 11434u32;
 
@@ -515,7 +515,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_messages_multiple_providers() {
+    async fn test_client_handle_messages_multiple_providers() {
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
 
         let response = DiscoveryResponse {
@@ -572,7 +572,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_messages_from_multiple_servers() {
+    async fn test_client_handle_messages_from_multiple_servers() {
         let server1_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
         let server2_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 200)), 5000);
 
@@ -640,7 +640,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_messages_empty_provider_list() {
+    async fn test_client_handle_messages_empty_provider_list() {
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
 
         let response = DiscoveryResponse {
@@ -669,5 +669,276 @@ mod tests {
         assert!(result.is_err(), "should timeout with no commands received");
 
         handle.abort();
+    }
+
+    /// Mock implementation of ServerDiscoveryNetwork for testing.
+    pub struct MockServerDiscoveryNetwork {
+        requests: Arc<Mutex<Vec<(DiscoveryRequest, SocketAddr)>>>,
+        sent_responses: Arc<Mutex<Vec<(DiscoveryResponse, SocketAddr)>>>,
+    }
+
+    impl MockServerDiscoveryNetwork {
+        pub fn new(requests: Vec<(DiscoveryRequest, SocketAddr)>) -> Self {
+            Self {
+                requests: Arc::new(Mutex::new(requests)),
+                sent_responses: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        pub async fn get_sent_responses(&self) -> Vec<(DiscoveryResponse, SocketAddr)> {
+            self.sent_responses.lock().await.clone()
+        }
+    }
+
+    #[async_trait]
+    impl ServerDiscoveryNetwork for MockServerDiscoveryNetwork {
+        async fn recv(&self) -> io::Result<(DiscoveryRequest, SocketAddr)> {
+            let mut requests = self.requests.lock().await;
+            if let Some(request) = requests.pop() {
+                Ok(request)
+            } else {
+                // Return an error to break out of the loop when no more requests
+                Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "no more requests",
+                ))
+            }
+        }
+
+        async fn send(&self, response: &DiscoveryResponse, addr: SocketAddr) -> io::Result<usize> {
+            let mut sent_responses = self.sent_responses.lock().await;
+            sent_responses.push((response.clone(), addr));
+            Ok(0)
+        }
+    }
+
+    /// Helper to create a ServerDiscovery with pre-populated alive providers
+    async fn create_server_discovery_with_alive_providers(
+        mock_network: Arc<MockServerDiscoveryNetwork>,
+        alive_providers: HashMap<ProviderType, u16>,
+    ) -> ServerDiscovery {
+        let server = ServerDiscovery::with_network(
+            mock_network,
+            HashMap::new(), // providers not needed for handle_messages tests
+            DEFAULT_ALLOWED_PROVIDERS.to_vec(),
+            DEFAULT_SERVER_LIVENESS_INTERVAL,
+        );
+        // Set alive providers directly
+        *server.alive_providers.lock().await = alive_providers;
+        server
+    }
+
+    #[tokio::test]
+    async fn test_server_handle_messages_responds_with_matching_provider() {
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
+
+        let request = DiscoveryRequest {
+            allowed_providers: vec![ProviderType::Ollama as i32],
+        };
+
+        // Requests are popped, so only one request here
+        let mock_network = Arc::new(MockServerDiscoveryNetwork::new(vec![(
+            request,
+            client_addr,
+        )]));
+
+        let mut alive_providers = HashMap::new();
+        alive_providers.insert(ProviderType::Ollama, 11434);
+
+        let server =
+            create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
+                .await;
+
+        // Run handle_messages with a timeout - it will exit when mock returns error
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+
+        let sent_responses = mock_network.get_sent_responses().await;
+        assert_eq!(sent_responses.len(), 1);
+
+        let (response, addr) = &sent_responses[0];
+        assert_eq!(*addr, client_addr);
+        assert_eq!(response.provider_info.len(), 1);
+        assert_eq!(
+            response.provider_info[0].provider_type,
+            ProviderType::Ollama as i32
+        );
+        assert_eq!(response.provider_info[0].port, 11434);
+    }
+
+    #[tokio::test]
+    async fn test_server_handle_messages_responds_with_multiple_matching_providers() {
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
+
+        let request = DiscoveryRequest {
+            allowed_providers: vec![ProviderType::Ollama as i32, ProviderType::Vllm as i32],
+        };
+
+        let mock_network = Arc::new(MockServerDiscoveryNetwork::new(vec![(
+            request,
+            client_addr,
+        )]));
+
+        let mut alive_providers = HashMap::new();
+        alive_providers.insert(ProviderType::Ollama, 11434);
+        alive_providers.insert(ProviderType::Vllm, 8000);
+
+        let server =
+            create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
+                .await;
+
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+
+        let sent_responses = mock_network.get_sent_responses().await;
+        assert_eq!(sent_responses.len(), 1);
+
+        let (response, addr) = &sent_responses[0];
+        assert_eq!(*addr, client_addr);
+        assert_eq!(response.provider_info.len(), 2);
+
+        let mut ports: Vec<u32> = response.provider_info.iter().map(|p| p.port).collect();
+        ports.sort();
+        assert_eq!(ports, vec![8000, 11434]);
+    }
+
+    #[tokio::test]
+    async fn test_server_handle_messages_filters_to_requested_providers_only() {
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
+
+        // Client only requests Ollama
+        let request = DiscoveryRequest {
+            allowed_providers: vec![ProviderType::Ollama as i32],
+        };
+
+        let mock_network = Arc::new(MockServerDiscoveryNetwork::new(vec![(
+            request,
+            client_addr,
+        )]));
+
+        // Server has both Ollama and VLLM alive
+        let mut alive_providers = HashMap::new();
+        alive_providers.insert(ProviderType::Ollama, 11434);
+        alive_providers.insert(ProviderType::Vllm, 8000);
+
+        let server =
+            create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
+                .await;
+
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+
+        let sent_responses = mock_network.get_sent_responses().await;
+        assert_eq!(sent_responses.len(), 1);
+
+        let (response, _) = &sent_responses[0];
+        // Should only include Ollama, not VLLM
+        assert_eq!(response.provider_info.len(), 1);
+        assert_eq!(
+            response.provider_info[0].provider_type,
+            ProviderType::Ollama as i32
+        );
+    }
+
+    #[tokio::test]
+    async fn test_server_handle_messages_no_response_when_no_matching_providers() {
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
+
+        // Client requests VLLM
+        let request = DiscoveryRequest {
+            allowed_providers: vec![ProviderType::Vllm as i32],
+        };
+
+        let mock_network = Arc::new(MockServerDiscoveryNetwork::new(vec![(
+            request,
+            client_addr,
+        )]));
+
+        // Server only has Ollama alive
+        let mut alive_providers = HashMap::new();
+        alive_providers.insert(ProviderType::Ollama, 11434);
+
+        let server =
+            create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
+                .await;
+
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+
+        let sent_responses = mock_network.get_sent_responses().await;
+        // Should not send any response since there's no matching provider
+        assert_eq!(sent_responses.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_server_handle_messages_no_response_when_no_alive_providers() {
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
+
+        let request = DiscoveryRequest {
+            allowed_providers: vec![ProviderType::Ollama as i32],
+        };
+
+        let mock_network = Arc::new(MockServerDiscoveryNetwork::new(vec![(
+            request,
+            client_addr,
+        )]));
+
+        // No alive providers
+        let alive_providers = HashMap::new();
+
+        let server =
+            create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
+                .await;
+
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+
+        let sent_responses = mock_network.get_sent_responses().await;
+        assert_eq!(sent_responses.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_server_handle_messages_handles_multiple_requests() {
+        let client1_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
+        let client2_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 60)), 12346);
+
+        let request1 = DiscoveryRequest {
+            allowed_providers: vec![ProviderType::Ollama as i32],
+        };
+        let request2 = DiscoveryRequest {
+            allowed_providers: vec![ProviderType::Vllm as i32],
+        };
+
+        // Requests are popped, so order is reversed
+        let mock_network = Arc::new(MockServerDiscoveryNetwork::new(vec![
+            (request2, client2_addr),
+            (request1, client1_addr),
+        ]));
+
+        let mut alive_providers = HashMap::new();
+        alive_providers.insert(ProviderType::Ollama, 11434);
+        alive_providers.insert(ProviderType::Vllm, 8000);
+
+        let server =
+            create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
+                .await;
+
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+
+        let sent_responses = mock_network.get_sent_responses().await;
+        assert_eq!(sent_responses.len(), 2);
+
+        // First response should be for client1 (Ollama)
+        let (response1, addr1) = &sent_responses[0];
+        assert_eq!(*addr1, client1_addr);
+        assert_eq!(response1.provider_info.len(), 1);
+        assert_eq!(
+            response1.provider_info[0].provider_type,
+            ProviderType::Ollama as i32
+        );
+
+        // Second response should be for client2 (VLLM)
+        let (response2, addr2) = &sent_responses[1];
+        assert_eq!(*addr2, client2_addr);
+        assert_eq!(response2.provider_info.len(), 1);
+        assert_eq!(
+            response2.provider_info[0].provider_type,
+            ProviderType::Vllm as i32
+        );
     }
 }
