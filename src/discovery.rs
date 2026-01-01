@@ -431,8 +431,82 @@ impl ServerDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::Provider;
     use std::net::{IpAddr, Ipv4Addr};
     use tokio::sync::mpsc;
+
+    /// Mock implementation of Provider for testing.
+    pub struct MockProvider {
+        port: u16,
+        health_results: Arc<Mutex<Vec<bool>>>,
+        default_result: bool,
+    }
+
+    impl MockProvider {
+        pub fn new(port: u16, health_results: Vec<bool>) -> Self {
+            // Reverse so we can pop from the end
+            let mut results = health_results.clone();
+            results.reverse();
+            let default_result = health_results.last().copied().unwrap_or(false);
+            Self {
+                port,
+                health_results: Arc::new(Mutex::new(results)),
+                default_result,
+            }
+        }
+
+        pub fn always_healthy(port: u16) -> Self {
+            Self {
+                port,
+                health_results: Arc::new(Mutex::new(vec![])),
+                default_result: true,
+            }
+        }
+
+        pub fn always_unhealthy(port: u16) -> Self {
+            Self {
+                port,
+                health_results: Arc::new(Mutex::new(vec![])),
+                default_result: false,
+            }
+        }
+
+        pub fn with_error(port: u16) -> MockProviderWithError {
+            MockProviderWithError { port }
+        }
+    }
+
+    #[async_trait]
+    impl Provider for MockProvider {
+        async fn health_check(&self) -> anyhow::Result<bool> {
+            let mut results = self.health_results.lock().await;
+            if let Some(result) = results.pop() {
+                Ok(result)
+            } else {
+                Ok(self.default_result)
+            }
+        }
+
+        fn get_port(&self) -> u16 {
+            self.port
+        }
+    }
+
+    /// Mock provider that always returns an error on health check
+    pub struct MockProviderWithError {
+        port: u16,
+    }
+
+    #[async_trait]
+    impl Provider for MockProviderWithError {
+        async fn health_check(&self) -> anyhow::Result<bool> {
+            Err(anyhow::anyhow!("connection refused"))
+        }
+
+        fn get_port(&self) -> u16 {
+            self.port
+        }
+    }
 
     /// Mock implementation of ClientDiscoveryNetwork for testing.
     pub struct MockClientDiscoveryNetwork {
@@ -940,5 +1014,207 @@ mod tests {
             response2.provider_info[0].provider_type,
             ProviderType::Vllm as i32
         );
+    }
+
+    /// Helper to create a ServerDiscovery with mock providers for liveness tests
+    fn create_server_discovery_with_mock_providers(
+        providers: HashMap<ProviderType, Arc<dyn Provider>>,
+        allowed_providers: Vec<ProviderType>,
+    ) -> ServerDiscovery {
+        let mock_network = Arc::new(MockServerDiscoveryNetwork::new(vec![]));
+        ServerDiscovery::with_network(
+            mock_network,
+            providers,
+            allowed_providers,
+            Duration::from_millis(10), // Short interval for tests
+        )
+    }
+
+    #[tokio::test]
+    async fn test_server_liveness_check_adds_healthy_provider() {
+        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+        providers.insert(
+            ProviderType::Ollama,
+            Arc::new(MockProvider::always_healthy(11434)),
+        );
+
+        let server =
+            create_server_discovery_with_mock_providers(providers, vec![ProviderType::Ollama]);
+
+        // Initially no alive providers
+        assert!(server.alive_providers.lock().await.is_empty());
+
+        // Run liveness check with timeout (one iteration)
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+
+        // Provider should now be alive
+        let alive = server.alive_providers.lock().await;
+        assert_eq!(alive.len(), 1);
+        assert_eq!(alive.get(&ProviderType::Ollama), Some(&11434));
+    }
+
+    #[tokio::test]
+    async fn test_server_liveness_check_removes_unhealthy_provider() {
+        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+        providers.insert(
+            ProviderType::Ollama,
+            Arc::new(MockProvider::always_unhealthy(11434)),
+        );
+
+        let server =
+            create_server_discovery_with_mock_providers(providers, vec![ProviderType::Ollama]);
+
+        // Pre-populate with an alive provider
+        server
+            .alive_providers
+            .lock()
+            .await
+            .insert(ProviderType::Ollama, 11434);
+
+        // Run liveness check
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+
+        // Provider should be removed
+        let alive = server.alive_providers.lock().await;
+        assert!(alive.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_server_liveness_check_handles_health_check_error() {
+        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+        providers.insert(
+            ProviderType::Ollama,
+            Arc::new(MockProvider::with_error(11434)),
+        );
+
+        let server =
+            create_server_discovery_with_mock_providers(providers, vec![ProviderType::Ollama]);
+
+        // Pre-populate with an alive provider
+        server
+            .alive_providers
+            .lock()
+            .await
+            .insert(ProviderType::Ollama, 11434);
+
+        // Run liveness check
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+
+        // Provider should be removed on error
+        let alive = server.alive_providers.lock().await;
+        assert!(alive.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_server_liveness_check_multiple_providers() {
+        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+        providers.insert(
+            ProviderType::Ollama,
+            Arc::new(MockProvider::always_healthy(11434)),
+        );
+        providers.insert(
+            ProviderType::Vllm,
+            Arc::new(MockProvider::always_healthy(8000)),
+        );
+        providers.insert(
+            ProviderType::LmStudio,
+            Arc::new(MockProvider::always_unhealthy(1234)),
+        );
+
+        let server = create_server_discovery_with_mock_providers(
+            providers,
+            vec![
+                ProviderType::Ollama,
+                ProviderType::Vllm,
+                ProviderType::LmStudio,
+            ],
+        );
+
+        // Run liveness check
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+
+        // Only healthy providers should be alive
+        let alive = server.alive_providers.lock().await;
+        assert_eq!(alive.len(), 2);
+        assert_eq!(alive.get(&ProviderType::Ollama), Some(&11434));
+        assert_eq!(alive.get(&ProviderType::Vllm), Some(&8000));
+        assert!(!alive.contains_key(&ProviderType::LmStudio));
+    }
+
+    #[tokio::test]
+    async fn test_server_liveness_check_only_checks_allowed_providers() {
+        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+        providers.insert(
+            ProviderType::Ollama,
+            Arc::new(MockProvider::always_healthy(11434)),
+        );
+        providers.insert(
+            ProviderType::Vllm,
+            Arc::new(MockProvider::always_healthy(8000)),
+        );
+
+        // Only allow Ollama, not VLLM
+        let server =
+            create_server_discovery_with_mock_providers(providers, vec![ProviderType::Ollama]);
+
+        // Run liveness check
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+
+        // Only allowed provider should be checked and added
+        let alive = server.alive_providers.lock().await;
+        assert_eq!(alive.len(), 1);
+        assert_eq!(alive.get(&ProviderType::Ollama), Some(&11434));
+        assert!(!alive.contains_key(&ProviderType::Vllm));
+    }
+
+    #[tokio::test]
+    async fn test_server_liveness_check_provider_state_transitions() {
+        // Test that a provider can transition from unhealthy to healthy
+        // The mock will return: false (first call), then true for all subsequent calls
+        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+        providers.insert(
+            ProviderType::Ollama,
+            Arc::new(MockProvider::new(11434, vec![false, true])),
+        );
+
+        let server =
+            create_server_discovery_with_mock_providers(providers, vec![ProviderType::Ollama]);
+
+        // Initially not alive
+        assert!(server.alive_providers.lock().await.is_empty());
+
+        // Run liveness check - after multiple iterations, provider should be healthy
+        // (first iteration: false -> not added, subsequent iterations: true -> added)
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+
+        // Provider should be alive (added during one of the later iterations)
+        let alive = server.alive_providers.lock().await;
+        assert_eq!(alive.len(), 1);
+        assert_eq!(alive.get(&ProviderType::Ollama), Some(&11434));
+    }
+
+    #[tokio::test]
+    async fn test_server_liveness_check_provider_goes_offline() {
+        // Test that a provider that goes offline is removed
+        // The mock returns: true (first call), then false for all subsequent calls
+        let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+        providers.insert(
+            ProviderType::Ollama,
+            Arc::new(MockProvider::new(11434, vec![true, false])),
+        );
+
+        let server =
+            create_server_discovery_with_mock_providers(providers, vec![ProviderType::Ollama]);
+
+        // Initially not alive
+        assert!(server.alive_providers.lock().await.is_empty());
+
+        // Run liveness check - provider will be added then removed
+        // (first iteration: true -> added, subsequent iterations: false -> removed)
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+
+        // Provider should not be alive (removed during later iterations)
+        let alive = server.alive_providers.lock().await;
+        assert!(alive.is_empty());
     }
 }
