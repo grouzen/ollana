@@ -202,7 +202,7 @@ impl ClientDiscovery {
         allowed_providers: Vec<ProviderType>,
     ) -> io::Result<Self> {
         let network = UdpClientDiscoveryNetwork::new(server_port).await?;
-        
+
         Ok(Self {
             network: Arc::new(network),
             broadcast_interval,
@@ -425,5 +425,249 @@ impl ServerDiscovery {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+    use tokio::sync::mpsc;
+
+    /// Mock implementation of ClientDiscoveryNetwork for testing.
+    pub struct MockClientDiscoveryNetwork {
+        responses: Arc<Mutex<Vec<(DiscoveryResponse, SocketAddr)>>>,
+    }
+
+    impl MockClientDiscoveryNetwork {
+        pub fn new(responses: Vec<(DiscoveryResponse, SocketAddr)>) -> Self {
+            Self {
+                responses: Arc::new(Mutex::new(responses)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ClientDiscoveryNetwork for MockClientDiscoveryNetwork {
+        async fn send(&self, _request: &DiscoveryRequest) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        async fn recv(&self) -> io::Result<(DiscoveryResponse, SocketAddr)> {
+            let mut responses = self.responses.lock().await;
+            if let Some(response) = responses.pop() {
+                Ok(response)
+            } else {
+                // Return an error to break out of the loop when no more responses
+                Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "no more responses",
+                ))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_messages_single_provider() {
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
+        let provider_port = 11434u32;
+
+        let response = DiscoveryResponse {
+            provider_info: vec![ProviderInfo {
+                provider_type: ProviderType::Ollama as i32,
+                port: provider_port,
+            }],
+        };
+
+        let mock_network = Arc::new(MockClientDiscoveryNetwork::new(vec![(
+            response,
+            server_addr,
+        )]));
+
+        let client = ClientDiscovery::with_network(
+            mock_network,
+            DEFAULT_CLIENT_BROADCAST_INTERVAL,
+            DEFAULT_ALLOWED_PROVIDERS.to_vec(),
+        );
+
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
+
+        // Run handle_messages in a separate task with a timeout
+        let handle = tokio::spawn(async move {
+            let _ = client.handle_messages(&cmd_tx).await;
+        });
+
+        // Wait for the command to be received
+        let cmd = tokio::time::timeout(Duration::from_millis(100), cmd_rx.recv())
+            .await
+            .expect("timeout waiting for command")
+            .expect("channel closed");
+
+        match cmd {
+            ManagerCommand::Add(addr) => {
+                assert_eq!(addr.ip(), server_addr.ip());
+                assert_eq!(addr.port(), provider_port as u16);
+            }
+            _ => panic!("expected ManagerCommand::Add"),
+        }
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_handle_messages_multiple_providers() {
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
+
+        let response = DiscoveryResponse {
+            provider_info: vec![
+                ProviderInfo {
+                    provider_type: ProviderType::Ollama as i32,
+                    port: 11434,
+                },
+                ProviderInfo {
+                    provider_type: ProviderType::Vllm as i32,
+                    port: 8000,
+                },
+            ],
+        };
+
+        let mock_network = Arc::new(MockClientDiscoveryNetwork::new(vec![(
+            response,
+            server_addr,
+        )]));
+
+        let client = ClientDiscovery::with_network(
+            mock_network,
+            DEFAULT_CLIENT_BROADCAST_INTERVAL,
+            DEFAULT_ALLOWED_PROVIDERS.to_vec(),
+        );
+
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
+
+        let handle = tokio::spawn(async move {
+            let _ = client.handle_messages(&cmd_tx).await;
+        });
+
+        // Collect both commands
+        let mut received_ports = Vec::new();
+        for _ in 0..2 {
+            let cmd = tokio::time::timeout(Duration::from_millis(100), cmd_rx.recv())
+                .await
+                .expect("timeout waiting for command")
+                .expect("channel closed");
+
+            match cmd {
+                ManagerCommand::Add(addr) => {
+                    assert_eq!(addr.ip(), server_addr.ip());
+                    received_ports.push(addr.port());
+                }
+                _ => panic!("expected ManagerCommand::Add"),
+            }
+        }
+
+        received_ports.sort();
+        assert_eq!(received_ports, vec![8000, 11434]);
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_handle_messages_from_multiple_servers() {
+        let server1_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
+        let server2_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 200)), 5000);
+
+        let response1 = DiscoveryResponse {
+            provider_info: vec![ProviderInfo {
+                provider_type: ProviderType::Ollama as i32,
+                port: 11434,
+            }],
+        };
+
+        let response2 = DiscoveryResponse {
+            provider_info: vec![ProviderInfo {
+                provider_type: ProviderType::Vllm as i32,
+                port: 8000,
+            }],
+        };
+
+        // Note: responses are popped from the end, so order is reversed
+        let mock_network = Arc::new(MockClientDiscoveryNetwork::new(vec![
+            (response2, server2_addr),
+            (response1, server1_addr),
+        ]));
+
+        let client = ClientDiscovery::with_network(
+            mock_network,
+            DEFAULT_CLIENT_BROADCAST_INTERVAL,
+            DEFAULT_ALLOWED_PROVIDERS.to_vec(),
+        );
+
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
+
+        let handle = tokio::spawn(async move {
+            let _ = client.handle_messages(&cmd_tx).await;
+        });
+
+        // First command should be from server1
+        let cmd1 = tokio::time::timeout(Duration::from_millis(100), cmd_rx.recv())
+            .await
+            .expect("timeout waiting for command")
+            .expect("channel closed");
+
+        match cmd1 {
+            ManagerCommand::Add(addr) => {
+                assert_eq!(addr.ip(), server1_addr.ip());
+                assert_eq!(addr.port(), 11434);
+            }
+            _ => panic!("expected ManagerCommand::Add"),
+        }
+
+        // Second command should be from server2
+        let cmd2 = tokio::time::timeout(Duration::from_millis(100), cmd_rx.recv())
+            .await
+            .expect("timeout waiting for command")
+            .expect("channel closed");
+
+        match cmd2 {
+            ManagerCommand::Add(addr) => {
+                assert_eq!(addr.ip(), server2_addr.ip());
+                assert_eq!(addr.port(), 8000);
+            }
+            _ => panic!("expected ManagerCommand::Add"),
+        }
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_handle_messages_empty_provider_list() {
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
+
+        let response = DiscoveryResponse {
+            provider_info: vec![],
+        };
+
+        let mock_network = Arc::new(MockClientDiscoveryNetwork::new(vec![(
+            response,
+            server_addr,
+        )]));
+
+        let client = ClientDiscovery::with_network(
+            mock_network,
+            DEFAULT_CLIENT_BROADCAST_INTERVAL,
+            DEFAULT_ALLOWED_PROVIDERS.to_vec(),
+        );
+
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
+
+        let handle = tokio::spawn(async move {
+            let _ = client.handle_messages(&cmd_tx).await;
+        });
+
+        // Should not receive any commands when provider_info is empty
+        let result = tokio::time::timeout(Duration::from_millis(50), cmd_rx.recv()).await;
+        assert!(result.is_err(), "should timeout with no commands received");
+
+        handle.abort();
     }
 }
