@@ -7,6 +7,7 @@ use std::{
 
 use futures_util::StreamExt;
 use log::{debug, error, info};
+use prost::Message;
 use tokio::{
     net::UdpSocket,
     sync::{mpsc::Sender, Mutex},
@@ -15,19 +16,23 @@ use tokio::{
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
-    constants::{self, OLLANA_SERVER_PROXY_DEFAULT_PORT},
+    constants,
     manager::ManagerCommand,
     ollama::Ollama,
+    proto::{DiscoveryRequest, DiscoveryResponse, ProviderType},
 };
 
+// Temporary: Keep for ServerDiscovery until it's refactored
 const PROTO_MAGIC_NUMBER: u32 = 0x4C414E41; // LANA
 const RANDOM_UDP_PORT: u16 = 0;
 const DEFAULT_CLIENT_BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_SERVER_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
+const DISCOVERY_BUFFER_SIZE: usize = 1024;
 
 pub struct ClientDiscovery {
     server_port: u16,
     broadcast_interval: std::time::Duration,
+    allowed_providers: Vec<ProviderType>,
 }
 
 pub struct ServerDiscovery {
@@ -42,6 +47,12 @@ impl Default for ClientDiscovery {
         Self {
             server_port: constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
             broadcast_interval: DEFAULT_CLIENT_BROADCAST_INTERVAL,
+            allowed_providers: vec![
+                ProviderType::Ollama,
+                ProviderType::Vllm,
+                ProviderType::LmStudio,
+                ProviderType::LlamaServer,
+            ],
         }
     }
 }
@@ -88,52 +99,69 @@ impl ClientDiscovery {
         socket: &UdpSocket,
         cmd_tx: &Sender<ManagerCommand>,
     ) -> anyhow::Result<()> {
-        let mut buf: [u8; 4] = [0u8; 4];
+        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
 
         loop {
             if let Ok((len, addr)) = self.recv(socket, &mut buf).await {
                 debug!("Client discovery received {} bytes from {}", len, addr);
 
-                let magic = u32::from_be_bytes(buf);
+                match DiscoveryResponse::decode(&buf[..len]) {
+                    Ok(response) => {
+                        debug!(
+                            "Client discovery found a server with {} provider(s) at {}",
+                            response.provider_info.len(),
+                            addr
+                        );
 
-                if magic == PROTO_MAGIC_NUMBER {
-                    debug!("Client discovery found a server with address {}", addr);
+                        for provider_info in response.provider_info {
+                            let provider_port = provider_info.port as u16;
+                            let http_addr = (addr.ip(), provider_port)
+                                .to_socket_addrs()?
+                                .next()
+                                .ok_or_else(|| {
+                                    anyhow::Error::msg(format!(
+                                        "Invalid server proxy address for provider {:?} on port {}",
+                                        ProviderType::try_from(provider_info.provider_type),
+                                        provider_port
+                                    ))
+                                })?;
 
-                    // TODO: replace default port with the actual server proxy port received from a server
-                    let http_addr = (addr.ip(), OLLANA_SERVER_PROXY_DEFAULT_PORT)
-                        .to_socket_addrs()?
-                        .next()
-                        .ok_or_else(|| {
-                            anyhow::Error::msg("Server proxy address is invalid".to_string())
-                        })?;
-
-                    cmd_tx
-                        .send(ManagerCommand::Add(http_addr))
-                        .await
-                        .unwrap_or(());
-                } else {
-                    let hex = format!("0X{:X}", magic);
-                    debug!("Client discovery skipped message: {}", hex);
+                            cmd_tx
+                                .send(ManagerCommand::Add(http_addr))
+                                .await
+                                .unwrap_or(());
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Client discovery failed to decode message: {}", e);
+                    }
                 }
             }
         }
     }
 
     async fn send(&self, socket: &UdpSocket) -> io::Result<usize> {
+        let request = DiscoveryRequest {
+            allowed_providers: self.allowed_providers.iter().map(|p| *p as i32).collect(),
+        };
+
+        let mut buf = Vec::with_capacity(DISCOVERY_BUFFER_SIZE);
+        request.encode(&mut buf).map_err(|e| {
+            error!("Failed to encode DiscoveryRequest: {}", e);
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?;
+
         socket
-            .send_to(
-                &PROTO_MAGIC_NUMBER.to_be_bytes(),
-                (Ipv4Addr::BROADCAST, self.server_port),
-            )
+            .send_to(&buf, (Ipv4Addr::BROADCAST, self.server_port))
             .await
             .inspect_err(|error| error!("Client discovery error while sending: {}", error))
     }
 
-    async fn recv(&self, socket: &UdpSocket, buf: &mut [u8; 4]) -> io::Result<(usize, SocketAddr)> {
+    async fn recv(&self, socket: &UdpSocket, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         socket
             .recv_from(buf)
             .await
-            .inspect_err(|error| error!("Server discovery error while receiving: {}", error))
+            .inspect_err(|error| error!("Client discovery error while receiving: {}", error))
     }
 }
 

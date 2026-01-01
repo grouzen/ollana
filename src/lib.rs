@@ -13,6 +13,11 @@ pub mod provider;
 pub mod proxy;
 pub mod serve_app;
 
+// Include generated protobuf code
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/ollana.discovery.rs"));
+}
+
 pub const HTTP_HEADER_OLLANA_DEVICE_ID: &str = "X-Ollana-Device-Id";
 
 pub enum Mode {
