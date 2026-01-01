@@ -4,7 +4,7 @@ use crate::{
     args::ServeArgs,
     certs::Certs,
     device::Device,
-    discovery::ServerDiscovery,
+    discovery::{ServerDiscovery, DEFAULT_ALLOWED_PROVIDERS},
     manager::Manager,
     ollama::Ollama,
     proto::ProviderType,
@@ -86,12 +86,7 @@ impl ServeApp {
         providers.insert(ProviderType::LlamaServer, Arc::new(LlamaServer::default()));
 
         // Configure which providers to allow (currently all supported)
-        let allowed_providers = vec![
-            ProviderType::Ollama,
-            ProviderType::Vllm,
-            ProviderType::LmStudio,
-            ProviderType::LlamaServer,
-        ];
+        let allowed_providers = DEFAULT_ALLOWED_PROVIDERS.to_vec();
 
         let server_discovery = ServerDiscovery::new(providers, allowed_providers);
 

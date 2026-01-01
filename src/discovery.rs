@@ -28,6 +28,13 @@ const DEFAULT_CLIENT_BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_SERVER_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
 const DISCOVERY_BUFFER_SIZE: usize = 1024;
 
+pub const DEFAULT_ALLOWED_PROVIDERS: &[ProviderType] = &[
+    ProviderType::Ollama,
+    ProviderType::Vllm,
+    ProviderType::LmStudio,
+    ProviderType::LlamaServer,
+];
+
 pub struct ClientDiscovery {
     server_port: u16,
     broadcast_interval: std::time::Duration,
@@ -47,12 +54,7 @@ impl Default for ClientDiscovery {
         Self {
             server_port: constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
             broadcast_interval: DEFAULT_CLIENT_BROADCAST_INTERVAL,
-            allowed_providers: vec![
-                ProviderType::Ollama,
-                ProviderType::Vllm,
-                ProviderType::LmStudio,
-                ProviderType::LlamaServer,
-            ],
+            allowed_providers: DEFAULT_ALLOWED_PROVIDERS.to_vec(),
         }
     }
 }
@@ -69,12 +71,7 @@ impl Default for ServerDiscovery {
             port: constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
             providers,
             alive_providers: Arc::new(Mutex::new(HashMap::new())),
-            allowed_providers: vec![
-                ProviderType::Ollama,
-                ProviderType::Vllm,
-                ProviderType::LmStudio,
-                ProviderType::LlamaServer,
-            ],
+            allowed_providers: DEFAULT_ALLOWED_PROVIDERS.to_vec(),
             liveness_interval: DEFAULT_SERVER_LIVENESS_INTERVAL,
         }
     }
