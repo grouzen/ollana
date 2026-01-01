@@ -19,8 +19,8 @@ use tokio_stream::wrappers::IntervalStream;
 use crate::{
     constants,
     manager::ManagerCommand,
-    provider::{LMStudio, LlamaServer, Ollama as OllamaProvider, Provider, VLLM},
     proto::{DiscoveryRequest, DiscoveryResponse, ProviderInfo, ProviderType},
+    provider::{LMStudio, LlamaServer, Ollama as OllamaProvider, Provider, VLLM},
 };
 
 const RANDOM_UDP_PORT: u16 = 0;
@@ -98,9 +98,7 @@ impl ClientDiscovery {
         let mut stream = IntervalStream::new(time::interval(self.broadcast_interval));
 
         while stream.next().await.is_some() {
-            if let Ok(len) = self.send(socket).await {
-                debug!("Client discovery sent {} bytes", len);
-            }
+            let _ = self.send(socket).await;
         }
 
         Ok(())
@@ -111,42 +109,31 @@ impl ClientDiscovery {
         socket: &UdpSocket,
         cmd_tx: &Sender<ManagerCommand>,
     ) -> anyhow::Result<()> {
-        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
-
         loop {
-            if let Ok((len, addr)) = self.recv(socket, &mut buf).await {
-                debug!("Client discovery received {} bytes from {}", len, addr);
+            if let Ok((response, addr)) = self.recv(socket).await {
+                debug!(
+                    "Client discovery found a server with {} provider(s) at {}",
+                    response.provider_info.len(),
+                    addr
+                );
 
-                match DiscoveryResponse::decode(&buf[..len]) {
-                    Ok(response) => {
-                        debug!(
-                            "Client discovery found a server with {} provider(s) at {}",
-                            response.provider_info.len(),
-                            addr
-                        );
+                for provider_info in response.provider_info {
+                    let provider_port = provider_info.port as u16;
+                    let http_addr = (addr.ip(), provider_port)
+                        .to_socket_addrs()?
+                        .next()
+                        .ok_or_else(|| {
+                            anyhow::Error::msg(format!(
+                                "Invalid server proxy address for provider {:?} on port {}",
+                                ProviderType::try_from(provider_info.provider_type),
+                                provider_port
+                            ))
+                        })?;
 
-                        for provider_info in response.provider_info {
-                            let provider_port = provider_info.port as u16;
-                            let http_addr = (addr.ip(), provider_port)
-                                .to_socket_addrs()?
-                                .next()
-                                .ok_or_else(|| {
-                                    anyhow::Error::msg(format!(
-                                        "Invalid server proxy address for provider {:?} on port {}",
-                                        ProviderType::try_from(provider_info.provider_type),
-                                        provider_port
-                                    ))
-                                })?;
-
-                            cmd_tx
-                                .send(ManagerCommand::Add(http_addr))
-                                .await
-                                .unwrap_or(());
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Client discovery failed to decode message: {}", e);
-                    }
+                    cmd_tx
+                        .send(ManagerCommand::Add(http_addr))
+                        .await
+                        .unwrap_or(());
                 }
             }
         }
@@ -163,17 +150,31 @@ impl ClientDiscovery {
             io::Error::new(io::ErrorKind::InvalidData, e)
         })?;
 
-        socket
+        let len = socket
             .send_to(&buf, (Ipv4Addr::BROADCAST, self.server_port))
             .await
-            .inspect_err(|error| error!("Client discovery error while sending: {}", error))
+            .inspect_err(|error| error!("Client discovery error while sending: {}", error))?;
+
+        debug!("Client discovery sent {} bytes", len);
+
+        Ok(len)
     }
 
-    async fn recv(&self, socket: &UdpSocket, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        socket
-            .recv_from(buf)
+    async fn recv(&self, socket: &UdpSocket) -> io::Result<(DiscoveryResponse, SocketAddr)> {
+        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
+        let (len, addr) = socket
+            .recv_from(&mut buf)
             .await
-            .inspect_err(|error| error!("Client discovery error while receiving: {}", error))
+            .inspect_err(|error| error!("Client discovery error while receiving: {}", error))?;
+
+        debug!("Client discovery received {} bytes from {}", len, addr);
+
+        let response = DiscoveryResponse::decode(&buf[..len]).map_err(|e| {
+            debug!("Client discovery failed to decode message: {}", e);
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?;
+
+        Ok((response, addr))
     }
 }
 
@@ -202,35 +203,24 @@ impl ServerDiscovery {
     }
 
     async fn handle_messages(&self, socket: &UdpSocket) -> anyhow::Result<()> {
-        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
-
         loop {
-            if let Ok((len, addr)) = self.recv(socket, &mut buf).await {
-                debug!("Server discovery received {} bytes from {}", len, addr);
+            if let Ok((request, addr)) = self.recv(socket).await {
+                debug!(
+                    "Server discovery parsed request with {} allowed provider(s)",
+                    request.allowed_providers.len()
+                );
 
-                match DiscoveryRequest::decode(&buf[..len]) {
-                    Ok(request) => {
-                        debug!(
-                            "Server discovery parsed request with {} allowed provider(s)",
-                            request.allowed_providers.len()
-                        );
+                // Only respond if we have alive providers that match the request
+                let alive_providers = self.alive_providers.lock().await;
+                let has_matching_providers = request.allowed_providers.iter().any(|&p| {
+                    alive_providers.contains_key(
+                        &ProviderType::try_from(p).unwrap_or(ProviderType::Unspecified),
+                    )
+                });
 
-                        // Only respond if we have alive providers that match the request
-                        let alive_providers = self.alive_providers.lock().await;
-                        let has_matching_providers = request
-                            .allowed_providers
-                            .iter()
-                            .any(|&p| alive_providers.contains_key(&ProviderType::try_from(p).unwrap_or(ProviderType::Unspecified)));
-
-                        if has_matching_providers {
-                            if let Ok(len) = self.send(socket, addr, &request.allowed_providers).await {
-                                debug!("Server discovery sent {} bytes to {}", len, addr);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Server discovery failed to decode message: {}", e);
-                    }
+                if has_matching_providers {
+                    drop(alive_providers); // Release lock before async send
+                    let _ = self.send(socket, addr, &request.allowed_providers).await;
                 }
             }
         }
@@ -251,7 +241,7 @@ impl ServerDiscovery {
                             let port = provider.get_port();
                             if !alive_providers.contains_key(provider_type) {
                                 info!(
-                                    "Detected {:?} is running on port {}, will respond to discovery messages",
+                                    "Detected {:?} is running on port {}, will start responding for this provider",
                                     provider_type, port
                                 );
                                 alive_providers.insert(*provider_type, port);
@@ -271,11 +261,21 @@ impl ServerDiscovery {
         }
     }
 
-    async fn recv(&self, socket: &UdpSocket, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        socket
-            .recv_from(buf)
+    async fn recv(&self, socket: &UdpSocket) -> io::Result<(DiscoveryRequest, SocketAddr)> {
+        let mut buf = vec![0u8; DISCOVERY_BUFFER_SIZE];
+        let (len, addr) = socket
+            .recv_from(&mut buf)
             .await
-            .inspect_err(|error| error!("Server discovery error while receiving: {}", error))
+            .inspect_err(|error| error!("Server discovery error while receiving: {}", error))?;
+
+        debug!("Server discovery received {} bytes from {}", len, addr);
+
+        let request = DiscoveryRequest::decode(&buf[..len]).map_err(|e| {
+            debug!("Server discovery failed to decode message: {}", e);
+            io::Error::new(io::ErrorKind::InvalidData, e)
+        })?;
+
+        Ok((request, addr))
     }
 
     async fn send(
@@ -310,9 +310,12 @@ impl ServerDiscovery {
             io::Error::new(io::ErrorKind::InvalidData, e)
         })?;
 
-        socket
+        let len = socket
             .send_to(&buf, addr)
             .await
-            .inspect_err(|error| error!("Server discovery error while sending: {}", error))
+            .inspect_err(|error| error!("Server discovery error while sending: {}", error))?;
+
+        debug!("Server discovery sent {} bytes to {}", len, addr);
+        Ok(len)
     }
 }

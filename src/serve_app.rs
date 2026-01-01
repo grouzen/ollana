@@ -7,9 +7,9 @@ use crate::{
     discovery::ServerDiscovery,
     manager::Manager,
     ollama::Ollama,
+    proto::ProviderType,
     provider::{LMStudio, LlamaServer, Ollama as OllamaProvider, Provider, VLLM},
     proxy::ServerProxy,
-    proto::ProviderType,
     Mode,
 };
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
@@ -77,19 +77,13 @@ impl ServeApp {
 
     async fn run_server_mode(&self) -> anyhow::Result<()> {
         let server_proxy = ServerProxy::new(self.device.clone());
-        
+
         // Initialize providers for all supported provider types
         let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
-        providers.insert(
-            ProviderType::Ollama,
-            Arc::new(OllamaProvider::default()),
-        );
+        providers.insert(ProviderType::Ollama, Arc::new(OllamaProvider::default()));
         providers.insert(ProviderType::Vllm, Arc::new(VLLM::default()));
         providers.insert(ProviderType::LmStudio, Arc::new(LMStudio::default()));
-        providers.insert(
-            ProviderType::LlamaServer,
-            Arc::new(LlamaServer::default()),
-        );
+        providers.insert(ProviderType::LlamaServer, Arc::new(LlamaServer::default()));
 
         // Configure which providers to allow (currently all supported)
         let allowed_providers = vec![
