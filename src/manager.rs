@@ -9,7 +9,7 @@ use tokio::{
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
-    device::{ConfigDevice, Device},
+    device::Device,
     discovery::{ClientDiscovery, UdpClientDiscovery},
     ollama::Ollama,
     ollana::{HttpOllana, Ollana},
@@ -29,7 +29,7 @@ pub struct Manager {
     servers: VecDeque<SocketAddr>,
     active_proxy: Option<ActiveProxy>,
     liveness_interval: std::time::Duration,
-    device: Arc<ConfigDevice>,
+    device: Arc<dyn Device>,
 }
 
 pub enum ManagerCommand {
@@ -38,7 +38,7 @@ pub enum ManagerCommand {
 }
 
 impl Manager {
-    pub fn new(device: Arc<ConfigDevice>) -> Self {
+    pub fn new(device: Arc<dyn Device>) -> Self {
         Self {
             servers: VecDeque::new(),
             active_proxy: None,
@@ -140,7 +140,7 @@ impl Manager {
             let ollama = Self::ollama_for_server(server)?;
             let ollana = HttpOllana::new(server)?;
 
-            if let Some(auth_response) = ollana.check_authorization(self.device.id.clone()).await? {
+            if let Some(auth_response) = ollana.check_authorization(self.device.get_id()).await? {
                 let server_device_id = auth_response.device_id;
 
                 // Check if the server's device_id is allowed on the client

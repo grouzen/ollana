@@ -5,6 +5,12 @@ use crate::{certs::Certs, config::Config};
 /// Trait for device management operations.
 /// This allows for different implementations of device management behavior.
 pub trait Device: Send + Sync {
+    /// Gets the device ID.
+    ///
+    /// Returns the unique identifier of this device.
+    ///
+    fn get_id(&self) -> String;
+
     /// Allows a device with the specified ID.
     ///
     /// If the device is not already allowed, it will be added to the list and the configuration saved.
@@ -67,6 +73,14 @@ impl ConfigDevice {
 }
 
 impl Device for ConfigDevice {
+    /// Gets the device ID.
+    ///
+    /// Returns the unique identifier of this device.
+    ///
+    fn get_id(&self) -> String {
+        self.id.clone()
+    }
+
     /// Allows a device with the specified ID.
     ///
     /// If the device is not already allowed, it will be added to the list and the configuration saved.

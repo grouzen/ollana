@@ -46,7 +46,7 @@ fn main() -> anyhow::Result<()> {
             serve_app.run()
         }
         Args::Device(DeviceCommands::Show) => {
-            println!("Device ID: {}", device.id);
+            println!("Device ID: {}", device.get_id());
 
             Ok(())
         }
