@@ -12,7 +12,7 @@ use crate::{
     device::{ConfigDevice, Device},
     discovery::{ClientDiscovery, UdpClientDiscovery},
     ollama::Ollama,
-    ollana::Ollana,
+    ollana::{HttpOllana, Ollana},
     proxy::ClientProxy,
 };
 use log::{debug, error, info};
@@ -138,7 +138,7 @@ impl Manager {
         // Don't do anything for the already added server
         if !self.servers.contains(&server) {
             let ollama = Self::ollama_for_server(server)?;
-            let ollana = Ollana::new(server)?;
+            let ollana = HttpOllana::new(server)?;
 
             if let Some(auth_response) = ollana.check_authorization(self.device.id.clone()).await? {
                 let server_device_id = auth_response.device_id;
