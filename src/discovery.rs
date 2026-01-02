@@ -187,12 +187,6 @@ impl ServerDiscoveryNetwork for UdpServerDiscoveryNetwork {
 pub trait ClientDiscovery: Send + Sync {
     /// Run the client discovery process.
     async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()>;
-
-    /// Periodically broadcast discovery requests to find servers.
-    async fn broadcast_periodically(&self) -> anyhow::Result<()>;
-
-    /// Handle incoming discovery responses from servers.
-    async fn handle_messages(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()>;
 }
 
 /// Trait for server-side discovery operations.
@@ -201,12 +195,6 @@ pub trait ClientDiscovery: Send + Sync {
 pub trait ServerDiscovery: Send + Sync {
     /// Run the server discovery process.
     async fn run(&self) -> anyhow::Result<()>;
-
-    /// Handle incoming discovery requests from clients.
-    async fn handle_messages(&self) -> anyhow::Result<()>;
-
-    /// Periodically check the liveness of providers.
-    async fn run_liveness_check(&self);
 }
 
 /// UDP-based implementation of ClientDiscovery.
@@ -260,19 +248,8 @@ impl UdpClientDiscovery {
             allowed_providers,
         }
     }
-}
 
-#[async_trait]
-impl ClientDiscovery for UdpClientDiscovery {
-    async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
-        info!("Running client discovery...");
-
-        tokio::select! {
-            val = self.broadcast_periodically() => val,
-            val = self.handle_messages(cmd_tx) => val,
-        }
-    }
-
+    /// Periodically broadcast discovery requests to find servers.
     async fn broadcast_periodically(&self) -> anyhow::Result<()> {
         let mut stream = IntervalStream::new(time::interval(self.broadcast_interval));
 
@@ -286,6 +263,7 @@ impl ClientDiscovery for UdpClientDiscovery {
         Ok(())
     }
 
+    /// Handle incoming discovery responses from servers.
     async fn handle_messages(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
         loop {
             if let Ok((response, addr)) = self.network.recv().await {
@@ -314,6 +292,18 @@ impl ClientDiscovery for UdpClientDiscovery {
                         .unwrap_or(());
                 }
             }
+        }
+    }
+}
+
+#[async_trait]
+impl ClientDiscovery for UdpClientDiscovery {
+    async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
+        info!("Running client discovery...");
+
+        tokio::select! {
+            val = self.broadcast_periodically() => val,
+            val = self.handle_messages(cmd_tx) => val,
         }
     }
 }
@@ -374,19 +364,8 @@ impl UdpServerDiscovery {
             liveness_interval,
         }
     }
-}
 
-#[async_trait]
-impl ServerDiscovery for UdpServerDiscovery {
-    async fn run(&self) -> anyhow::Result<()> {
-        info!("Running server discovery...");
-
-        tokio::select! {
-            val = self.handle_messages() => val,
-            val = self.run_liveness_check() => Ok(val),
-        }
-    }
-
+    /// Handle incoming discovery requests from clients.
     async fn handle_messages(&self) -> anyhow::Result<()> {
         loop {
             if let Ok((request, addr)) = self.network.recv().await {
@@ -428,6 +407,7 @@ impl ServerDiscovery for UdpServerDiscovery {
         }
     }
 
+    /// Periodically check the liveness of providers.
     async fn run_liveness_check(&self) {
         let mut stream = IntervalStream::new(time::interval(self.liveness_interval));
 
@@ -460,6 +440,18 @@ impl ServerDiscovery for UdpServerDiscovery {
                     }
                 }
             }
+        }
+    }
+}
+
+#[async_trait]
+impl ServerDiscovery for UdpServerDiscovery {
+    async fn run(&self) -> anyhow::Result<()> {
+        info!("Running server discovery...");
+
+        tokio::select! {
+            val = self.handle_messages() => val,
+            val = self.run_liveness_check() => Ok(val),
         }
     }
 }
@@ -578,7 +570,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_client_handle_messages_single_provider() {
+    async fn test_client_run_single_provider() {
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
         let provider_port = 11434u32;
 
@@ -602,9 +594,9 @@ mod tests {
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
 
-        // Run handle_messages in a separate task with a timeout
+        // Run client discovery in a separate task with a timeout
         let handle = tokio::spawn(async move {
-            let _ = client.handle_messages(&cmd_tx).await;
+            let _ = client.run(&cmd_tx).await;
         });
 
         // Wait for the command to be received
@@ -625,7 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_client_handle_messages_multiple_providers() {
+    async fn test_client_run_multiple_providers() {
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
 
         let response = DiscoveryResponse {
@@ -655,7 +647,7 @@ mod tests {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
 
         let handle = tokio::spawn(async move {
-            let _ = client.handle_messages(&cmd_tx).await;
+            let _ = client.run(&cmd_tx).await;
         });
 
         // Collect both commands
@@ -682,7 +674,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_client_handle_messages_from_multiple_servers() {
+    async fn test_client_run_from_multiple_servers() {
         let server1_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
         let server2_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 200)), 5000);
 
@@ -715,7 +707,7 @@ mod tests {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
 
         let handle = tokio::spawn(async move {
-            let _ = client.handle_messages(&cmd_tx).await;
+            let _ = client.run(&cmd_tx).await;
         });
 
         // First command should be from server1
@@ -750,7 +742,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_client_handle_messages_empty_provider_list() {
+    async fn test_client_run_empty_provider_list() {
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 5000);
 
         let response = DiscoveryResponse {
@@ -771,7 +763,7 @@ mod tests {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
 
         let handle = tokio::spawn(async move {
-            let _ = client.handle_messages(&cmd_tx).await;
+            let _ = client.run(&cmd_tx).await;
         });
 
         // Should not receive any commands when provider_info is empty
@@ -839,7 +831,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_handle_messages_responds_with_matching_provider() {
+    async fn test_server_run_responds_with_matching_provider() {
         let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
 
         let request = DiscoveryRequest {
@@ -859,8 +851,8 @@ mod tests {
             create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
                 .await;
 
-        // Run handle_messages with a timeout - it will exit when mock returns error
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+        // Run server discovery with a timeout - it will exit when mock returns error
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         let sent_responses = mock_network.get_sent_responses().await;
         assert_eq!(sent_responses.len(), 1);
@@ -876,7 +868,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_handle_messages_responds_with_multiple_matching_providers() {
+    async fn test_server_run_responds_with_multiple_matching_providers() {
         let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
 
         let request = DiscoveryRequest {
@@ -896,7 +888,7 @@ mod tests {
             create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
                 .await;
 
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         let sent_responses = mock_network.get_sent_responses().await;
         assert_eq!(sent_responses.len(), 1);
@@ -911,7 +903,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_handle_messages_filters_to_requested_providers_only() {
+    async fn test_server_run_filters_to_requested_providers_only() {
         let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
 
         // Client only requests Ollama
@@ -933,7 +925,7 @@ mod tests {
             create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
                 .await;
 
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         let sent_responses = mock_network.get_sent_responses().await;
         assert_eq!(sent_responses.len(), 1);
@@ -948,7 +940,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_handle_messages_no_response_when_no_matching_providers() {
+    async fn test_server_run_no_response_when_no_matching_providers() {
         let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
 
         // Client requests VLLM
@@ -969,7 +961,7 @@ mod tests {
             create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
                 .await;
 
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         let sent_responses = mock_network.get_sent_responses().await;
         // Should not send any response since there's no matching provider
@@ -977,7 +969,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_handle_messages_no_response_when_no_alive_providers() {
+    async fn test_server_run_no_response_when_no_alive_providers() {
         let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
 
         let request = DiscoveryRequest {
@@ -996,14 +988,14 @@ mod tests {
             create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
                 .await;
 
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         let sent_responses = mock_network.get_sent_responses().await;
         assert_eq!(sent_responses.len(), 0);
     }
 
     #[tokio::test]
-    async fn test_server_handle_messages_handles_multiple_requests() {
+    async fn test_server_run_handles_multiple_requests() {
         let client1_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)), 12345);
         let client2_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 60)), 12346);
 
@@ -1028,7 +1020,7 @@ mod tests {
             create_server_discovery_with_alive_providers(mock_network.clone(), alive_providers)
                 .await;
 
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.handle_messages()).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         let sent_responses = mock_network.get_sent_responses().await;
         assert_eq!(sent_responses.len(), 2);
@@ -1067,7 +1059,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_liveness_check_adds_healthy_provider() {
+    async fn test_server_run_adds_healthy_provider() {
         let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
         providers.insert(
             ProviderType::Ollama,
@@ -1080,8 +1072,8 @@ mod tests {
         // Initially no alive providers
         assert!(server.alive_providers.lock().await.is_empty());
 
-        // Run liveness check with timeout (one iteration)
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+        // Run server discovery with timeout (includes liveness check)
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         // Provider should now be alive
         let alive = server.alive_providers.lock().await;
@@ -1090,7 +1082,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_liveness_check_removes_unhealthy_provider() {
+    async fn test_server_run_removes_unhealthy_provider() {
         let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
         providers.insert(
             ProviderType::Ollama,
@@ -1107,8 +1099,8 @@ mod tests {
             .await
             .insert(ProviderType::Ollama, 11434);
 
-        // Run liveness check
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+        // Run server discovery (includes liveness check)
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         // Provider should be removed
         let alive = server.alive_providers.lock().await;
@@ -1116,7 +1108,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_liveness_check_handles_health_check_error() {
+    async fn test_server_run_handles_health_check_error() {
         let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
         providers.insert(
             ProviderType::Ollama,
@@ -1133,8 +1125,8 @@ mod tests {
             .await
             .insert(ProviderType::Ollama, 11434);
 
-        // Run liveness check
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+        // Run server discovery (includes liveness check)
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         // Provider should be removed on error
         let alive = server.alive_providers.lock().await;
@@ -1142,7 +1134,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_liveness_check_multiple_providers() {
+    async fn test_server_run_multiple_providers() {
         let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
         providers.insert(
             ProviderType::Ollama,
@@ -1166,8 +1158,8 @@ mod tests {
             ],
         );
 
-        // Run liveness check
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+        // Run server discovery (includes liveness check)
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         // Only healthy providers should be alive
         let alive = server.alive_providers.lock().await;
@@ -1178,7 +1170,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_liveness_check_only_checks_allowed_providers() {
+    async fn test_server_run_only_checks_allowed_providers() {
         let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
         providers.insert(
             ProviderType::Ollama,
@@ -1193,8 +1185,8 @@ mod tests {
         let server =
             create_server_discovery_with_mock_providers(providers, vec![ProviderType::Ollama]);
 
-        // Run liveness check
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+        // Run server discovery (includes liveness check)
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         // Only allowed provider should be checked and added
         let alive = server.alive_providers.lock().await;
@@ -1204,7 +1196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_liveness_check_provider_state_transitions() {
+    async fn test_server_run_provider_state_transitions() {
         // Test that a provider can transition from unhealthy to healthy
         // The mock will return: false (first call), then true for all subsequent calls
         let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
@@ -1219,9 +1211,9 @@ mod tests {
         // Initially not alive
         assert!(server.alive_providers.lock().await.is_empty());
 
-        // Run liveness check - after multiple iterations, provider should be healthy
+        // Run server discovery - after multiple liveness check iterations, provider should be healthy
         // (first iteration: false -> not added, subsequent iterations: true -> added)
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         // Provider should be alive (added during one of the later iterations)
         let alive = server.alive_providers.lock().await;
@@ -1230,7 +1222,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_liveness_check_provider_goes_offline() {
+    async fn test_server_run_provider_goes_offline() {
         // Test that a provider that goes offline is removed
         // The mock returns: true (first call), then false for all subsequent calls
         let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
@@ -1245,9 +1237,9 @@ mod tests {
         // Initially not alive
         assert!(server.alive_providers.lock().await.is_empty());
 
-        // Run liveness check - provider will be added then removed
+        // Run server discovery - provider will be added then removed
         // (first iteration: true -> added, subsequent iterations: false -> removed)
-        let _ = tokio::time::timeout(Duration::from_millis(50), server.run_liveness_check()).await;
+        let _ = tokio::time::timeout(Duration::from_millis(50), server.run()).await;
 
         // Provider should not be alive (removed during later iterations)
         let alive = server.alive_providers.lock().await;
