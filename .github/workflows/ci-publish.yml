@@ -36,6 +36,12 @@ jobs:
       - name: Run Clippy
         run: cargo make lint
 
+      - uses: moonrepo/setup-rust@v1
+        with:
+          bins: cargo-make
+      - name: Tests
+        run: cargo make test
+
       - name: Build
         run: cargo build --release --locked
 
