@@ -27,14 +27,14 @@ pub struct ServeApp {
     log_file: Option<PathBuf>,
     force_server_mode: bool,
     local_ollama: Arc<Ollama>,
-    certs: Arc<Certs>,
+    certs: Arc<dyn Certs>,
     device: Arc<ConfigDevice>,
 }
 
 impl ServeApp {
     pub fn new(
         args: ServeArgs,
-        certs: Arc<Certs>,
+        certs: Arc<dyn Certs>,
         device: Arc<ConfigDevice>,
     ) -> anyhow::Result<Self> {
         Ok(ServeApp {
@@ -109,7 +109,7 @@ impl ServeApp {
                 info!("Received SIGTERM, shutting down Server Mode...");
                 Ok(())
             }
-            val = server_proxy.run_server(&self.certs) => val,
+            val = server_proxy.run_server(self.certs.as_ref()) => val,
             val = server_discovery.run() => val,
         }
     }

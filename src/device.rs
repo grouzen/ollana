@@ -57,7 +57,7 @@ impl ConfigDevice {
     /// This function returns a new instance of the device wrapped in a `Result`.
     /// If any step fails, an error is returned with detailed information about what went wrong.
     ///
-    pub fn new(certs: &Certs, config: Arc<Mutex<dyn Config>>) -> anyhow::Result<Self> {
+    pub fn new(certs: &dyn Certs, config: Arc<Mutex<dyn Config>>) -> anyhow::Result<Self> {
         certs.gen_device()?;
 
         let id = sha256::digest(certs.get_device_key_bytes()?);

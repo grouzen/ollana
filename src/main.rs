@@ -2,7 +2,7 @@ use clap::Parser;
 use env_logger::{Builder, Env};
 use ollana::{
     args::{Args, DeviceCommands},
-    certs::Certs,
+    certs::X509Certs,
     config::{Config, TomlConfig},
     device::{ConfigDevice, Device},
     get_local_dir,
@@ -15,10 +15,10 @@ use std::{
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let certs = Arc::new(Certs::new()?);
+    let certs = Arc::new(X509Certs::new()?);
     let local_dir = get_local_dir()?;
     let config: Arc<Mutex<TomlConfig>> = Arc::new(Mutex::new(TomlConfig::load(&local_dir)?));
-    let device = Arc::new(ConfigDevice::new(&certs, config.clone())?);
+    let device = Arc::new(ConfigDevice::new(certs.as_ref(), config.clone())?);
 
     match args {
         Args::Serve(args) => {

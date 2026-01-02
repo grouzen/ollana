@@ -149,7 +149,7 @@ impl ServerProxy {
         }
     }
 
-    pub async fn run_server(&self, certs: &Certs) -> anyhow::Result<()> {
+    pub async fn run_server(&self, certs: &dyn Certs) -> anyhow::Result<()> {
         let client = self.client.clone();
         let ollama_url = self.ollama_url.clone();
         let device = self.device.clone();
