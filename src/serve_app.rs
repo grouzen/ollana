@@ -9,7 +9,7 @@ use crate::{
     },
     manager::Manager,
     ollama::Ollama,
-    proxy::ServerProxy,
+    proxy::{HttpServerProxy, ServerProxy},
     Mode,
 };
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
@@ -80,7 +80,7 @@ impl ServeApp {
     }
 
     async fn run_server_mode(&self) -> anyhow::Result<()> {
-        let server_proxy = ServerProxy::new(self.device.clone());
+        let server_proxy = HttpServerProxy::new(self.device.clone());
 
         // Initialize providers for all supported provider types
         let providers = create_default_providers();

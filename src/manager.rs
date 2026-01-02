@@ -13,14 +13,14 @@ use crate::{
     discovery::{ClientDiscovery, UdpClientDiscovery},
     ollama::Ollama,
     ollana::{HttpOllana, Ollana},
-    proxy::ClientProxy,
+    proxy::{ClientProxy, HttpClientProxy},
 };
 use log::{debug, error, info};
 
 const DEFAULT_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct ActiveProxy {
-    proxy: ClientProxy,
+    proxy: HttpClientProxy,
     server: SocketAddr,
     liveness_handle: AbortHandle,
 }
@@ -178,7 +178,7 @@ impl Manager {
         ollama: Ollama,
         cmd_tx: &Sender<ManagerCommand>,
     ) -> anyhow::Result<()> {
-        let mut client_proxy = ClientProxy::new(server, self.device.clone())?;
+        let mut client_proxy = HttpClientProxy::new(server, self.device.clone())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         info!("Spawning an Ollana proxy for address {}", server);

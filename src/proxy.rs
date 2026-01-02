@@ -3,6 +3,7 @@ use actix_web::{
     dev::ServerHandle, error, http::header::ContentType, web, App, Error, HttpRequest,
     HttpResponse, HttpServer,
 };
+use async_trait::async_trait;
 use futures_util::StreamExt as _;
 use log::{debug, error};
 use std::{fs::File, io::BufReader, net::SocketAddr, sync::Arc};
@@ -20,8 +21,20 @@ use crate::{
 
 pub const PROXY_DEFAULT_WORKERS_NUMBER: usize = 2;
 
+#[async_trait]
+pub trait ClientProxy: Send + Sync {
+    async fn run_server(&mut self, tx: Sender<Self>) -> anyhow::Result<()>
+    where
+        Self: Sized;
+}
+
+#[async_trait]
+pub trait ServerProxy: Send + Sync {
+    async fn run_server(&self, certs: &dyn Certs) -> anyhow::Result<()>;
+}
+
 #[derive(Clone)]
-pub struct ClientProxy {
+pub struct HttpClientProxy {
     client: reqwest::Client,
     host: String,
     port: u16,
@@ -30,7 +43,7 @@ pub struct ClientProxy {
     device: Arc<ConfigDevice>,
 }
 
-pub struct ServerProxy {
+pub struct HttpServerProxy {
     client: reqwest::Client,
     host: String,
     port: u16,
@@ -38,7 +51,7 @@ pub struct ServerProxy {
     device: Arc<ConfigDevice>,
 }
 
-impl ClientProxy {
+impl HttpClientProxy {
     pub fn new(server_socket_addr: SocketAddr, device: Arc<ConfigDevice>) -> anyhow::Result<Self> {
         let server_url = format!("https://{server_socket_addr}");
         let server_url = Url::parse(&server_url)?;
@@ -47,7 +60,7 @@ impl ClientProxy {
             .danger_accept_invalid_certs(true)
             .build()?;
 
-        Ok(ClientProxy {
+        Ok(HttpClientProxy {
             client,
             host: constants::OLLANA_CLIENT_PROXY_DEFAULT_ADDRESS.to_string(),
             port: constants::OLLANA_CLIENT_PROXY_DEFAULT_PORT,
@@ -55,33 +68,6 @@ impl ClientProxy {
             handle: None,
             device,
         })
-    }
-
-    pub async fn run_server(&mut self, tx: Sender<Self>) -> anyhow::Result<()> {
-        let client = self.client.clone();
-        let server_url = self.server_url.clone();
-        let device = self.device.clone();
-
-        let server = HttpServer::new(move || {
-            App::new()
-                .app_data(web::Data::new(client.clone()))
-                .app_data(web::Data::new(server_url.clone()))
-                .app_data(web::Data::new(device.clone()))
-                .wrap(Cors::permissive())
-                .default_service(web::to(Self::forward))
-        })
-        .bind((self.host.clone(), self.port))?
-        .workers(PROXY_DEFAULT_WORKERS_NUMBER)
-        .run();
-
-        let handle = server.handle();
-        self.handle = Some(handle);
-
-        if tx.send(self.clone()).is_err() {
-            error!("Couldn't send an updated client proxy");
-        }
-
-        server.await.map_err(anyhow::Error::new)
     }
 
     async fn forward(
@@ -131,7 +117,37 @@ impl ClientProxy {
     }
 }
 
-impl ServerProxy {
+#[async_trait]
+impl ClientProxy for HttpClientProxy {
+    async fn run_server(&mut self, tx: Sender<Self>) -> anyhow::Result<()> {
+        let client = self.client.clone();
+        let server_url = self.server_url.clone();
+        let device = self.device.clone();
+
+        let server = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(client.clone()))
+                .app_data(web::Data::new(server_url.clone()))
+                .app_data(web::Data::new(device.clone()))
+                .wrap(Cors::permissive())
+                .default_service(web::to(Self::forward))
+        })
+        .bind((self.host.clone(), self.port))?
+        .workers(PROXY_DEFAULT_WORKERS_NUMBER)
+        .run();
+
+        let handle = server.handle();
+        self.handle = Some(handle);
+
+        if tx.send(self.clone()).is_err() {
+            error!("Couldn't send an updated client proxy");
+        }
+
+        server.await.map_err(anyhow::Error::new)
+    }
+}
+
+impl HttpServerProxy {
     pub fn new(device: Arc<ConfigDevice>) -> Self {
         let ollama_url = format!(
             "http://{}:{}",
@@ -147,31 +163,6 @@ impl ServerProxy {
             ollama_url,
             device,
         }
-    }
-
-    pub async fn run_server(&self, certs: &dyn Certs) -> anyhow::Result<()> {
-        let client = self.client.clone();
-        let ollama_url = self.ollama_url.clone();
-        let device = self.device.clone();
-
-        let (cert_file, key_file) = certs.get_http_server_files()?;
-        let rustls_config = Self::rustls_config(cert_file, key_file)?;
-
-        HttpServer::new(move || {
-            App::new()
-                .app_data(web::Data::new(client.clone()))
-                .app_data(web::Data::new(ollama_url.clone()))
-                .app_data(web::Data::new(device.clone()))
-                .service(
-                    web::scope("/ollana/api").route("/authorize", web::post().to(Self::authorize)),
-                )
-                .default_service(web::to(Self::forward))
-        })
-        .bind_rustls_0_23((self.host.clone(), self.port), rustls_config)?
-        .workers(PROXY_DEFAULT_WORKERS_NUMBER)
-        .run()
-        .await
-        .map_err(anyhow::Error::new)
     }
 
     fn rustls_config(cert_file: File, key_file: File) -> anyhow::Result<rustls::ServerConfig> {
@@ -271,5 +262,33 @@ impl ServerProxy {
                 .content_type("text/plan")
                 .body("Device is not authorized"))
         }
+    }
+}
+
+#[async_trait]
+impl ServerProxy for HttpServerProxy {
+    async fn run_server(&self, certs: &dyn Certs) -> anyhow::Result<()> {
+        let client = self.client.clone();
+        let ollama_url = self.ollama_url.clone();
+        let device = self.device.clone();
+
+        let (cert_file, key_file) = certs.get_http_server_files()?;
+        let rustls_config = Self::rustls_config(cert_file, key_file)?;
+
+        let server = HttpServer::new(move || {
+            App::new()
+                .app_data(web::Data::new(client.clone()))
+                .app_data(web::Data::new(ollama_url.clone()))
+                .app_data(web::Data::new(device.clone()))
+                .service(
+                    web::scope("/ollana/api").route("/authorize", web::post().to(Self::authorize)),
+                )
+                .default_service(web::to(Self::forward))
+        })
+        .bind_rustls_0_23((self.host.clone(), self.port), rustls_config)?
+        .workers(PROXY_DEFAULT_WORKERS_NUMBER)
+        .run();
+
+        server.await.map_err(anyhow::Error::new)
     }
 }
