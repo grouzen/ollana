@@ -13,23 +13,27 @@ use crate::{
     discovery::{ClientDiscovery, UdpClientDiscovery},
     ollama::Ollama,
     ollana::{HttpOllana, Ollana},
-    proxy::{ClientProxy, HttpClientProxy},
+    proxy::ClientProxy,
 };
 use log::{debug, error, info};
 
 const DEFAULT_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct ActiveProxy {
-    proxy: HttpClientProxy,
+    proxy: Box<dyn ClientProxy>,
     server: SocketAddr,
     liveness_handle: AbortHandle,
 }
 
-pub struct Manager {
+pub struct Manager<F>
+where
+    F: Fn(SocketAddr, Arc<dyn Device>) -> anyhow::Result<Box<dyn ClientProxy>> + Send + Sync,
+{
     servers: VecDeque<SocketAddr>,
     active_proxy: Option<ActiveProxy>,
     liveness_interval: std::time::Duration,
     device: Arc<dyn Device>,
+    proxy_factory: F,
 }
 
 pub enum ManagerCommand {
@@ -37,13 +41,17 @@ pub enum ManagerCommand {
     Remove(SocketAddr),
 }
 
-impl Manager {
-    pub fn new(device: Arc<dyn Device>) -> Self {
+impl<F> Manager<F>
+where
+    F: Fn(SocketAddr, Arc<dyn Device>) -> anyhow::Result<Box<dyn ClientProxy>> + Send + Sync,
+{
+    pub fn new(device: Arc<dyn Device>, proxy_factory: F) -> Self {
         Self {
             servers: VecDeque::new(),
             active_proxy: None,
             liveness_interval: DEFAULT_LIVENESS_INTERVAL,
             device,
+            proxy_factory,
         }
     }
 
@@ -178,7 +186,7 @@ impl Manager {
         ollama: Ollama,
         cmd_tx: &Sender<ManagerCommand>,
     ) -> anyhow::Result<()> {
-        let mut client_proxy = HttpClientProxy::new(server, self.device.clone())?;
+        let mut client_proxy = (self.proxy_factory)(server, self.device.clone())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         info!("Spawning an Ollana proxy for address {}", server);

@@ -9,7 +9,7 @@ use crate::{
     },
     manager::Manager,
     ollama::Ollama,
-    proxy::{HttpServerProxy, ServerProxy},
+    proxy::{ClientProxy, HttpClientProxy, HttpServerProxy, ServerProxy},
     Mode,
 };
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
@@ -115,7 +115,9 @@ impl ServeApp {
     }
 
     async fn run_client_mode(&self) -> anyhow::Result<()> {
-        let mut manager = Manager::new(self.device.clone());
+        let mut manager = Manager::new(self.device.clone(), |server, device| {
+            Ok(Box::new(HttpClientProxy::new(server, device)?) as Box<dyn ClientProxy>)
+        });
 
         info!("Running in Client Mode");
 

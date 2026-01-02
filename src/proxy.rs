@@ -20,9 +20,9 @@ pub const PROXY_DEFAULT_WORKERS_NUMBER: usize = 2;
 
 #[async_trait]
 pub trait ClientProxy: Send + Sync {
-    async fn run_server(&mut self, tx: Sender<Self>) -> anyhow::Result<()>
-    where
-        Self: Sized;
+    async fn run_server(&mut self, tx: Sender<Box<dyn ClientProxy>>) -> anyhow::Result<()>;
+
+    async fn stop(&self, graceful: bool);
 }
 
 #[async_trait]
@@ -106,17 +106,11 @@ impl HttpClientProxy {
 
         Ok(response.streaming(server_response.bytes_stream()))
     }
-
-    pub async fn stop(&self, graceful: bool) {
-        if let Some(handle) = &self.handle {
-            handle.stop(graceful).await
-        }
-    }
 }
 
 #[async_trait]
 impl ClientProxy for HttpClientProxy {
-    async fn run_server(&mut self, tx: Sender<Self>) -> anyhow::Result<()> {
+    async fn run_server(&mut self, tx: Sender<Box<dyn ClientProxy>>) -> anyhow::Result<()> {
         let client = self.client.clone();
         let server_url = self.server_url.clone();
         let device = self.device.clone();
@@ -136,11 +130,17 @@ impl ClientProxy for HttpClientProxy {
         let handle = server.handle();
         self.handle = Some(handle);
 
-        if tx.send(self.clone()).is_err() {
+        if tx.send(Box::new(self.clone())).is_err() {
             error!("Couldn't send an updated client proxy");
         }
 
         server.await.map_err(anyhow::Error::new)
+    }
+
+    async fn stop(&self, graceful: bool) {
+        if let Some(handle) = &self.handle {
+            handle.stop(graceful).await
+        }
     }
 }
 
