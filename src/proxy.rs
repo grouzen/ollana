@@ -179,6 +179,62 @@ impl ClientProxy for HttpClientProxy {
     }
 }
 
+pub struct HttpServerProxyBuilder {
+    device: Arc<dyn Device>,
+    host: Option<String>,
+    port: Option<u16>,
+    ollama_url: Option<Url>,
+}
+
+impl HttpServerProxyBuilder {
+    pub fn new(device: Arc<dyn Device>) -> Self {
+        Self {
+            device,
+            host: None,
+            port: None,
+            ollama_url: None,
+        }
+    }
+
+    pub fn host(mut self, host: impl Into<String>) -> Self {
+        self.host = Some(host.into());
+        self
+    }
+
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = Some(port);
+        self
+    }
+
+    pub fn ollama_url(mut self, url: Url) -> Self {
+        self.ollama_url = Some(url);
+        self
+    }
+
+    pub fn build(self) -> HttpServerProxy {
+        let ollama_url = self.ollama_url.unwrap_or_else(|| {
+            let url_str = format!(
+                "http://{}:{}",
+                constants::OLLAMA_DEFAULT_ADDRESS,
+                constants::OLLAMA_DEFAULT_PORT
+            );
+            Url::parse(&url_str).unwrap()
+        });
+
+        HttpServerProxy {
+            client: reqwest::Client::default(),
+            host: self
+                .host
+                .unwrap_or_else(|| constants::OLLANA_SERVER_PROXY_DEFAULT_ADDRESS.to_string()),
+            port: self
+                .port
+                .unwrap_or(constants::OLLANA_SERVER_PROXY_DEFAULT_PORT),
+            ollama_url,
+            device: self.device,
+        }
+    }
+}
+
 pub struct HttpServerProxy {
     client: reqwest::Client,
     host: String,
@@ -189,20 +245,11 @@ pub struct HttpServerProxy {
 
 impl HttpServerProxy {
     pub fn new(device: Arc<dyn Device>) -> Self {
-        let ollama_url = format!(
-            "http://{}:{}",
-            constants::OLLAMA_DEFAULT_ADDRESS,
-            constants::OLLAMA_DEFAULT_PORT
-        );
-        let ollama_url = Url::parse(&ollama_url).unwrap();
+        HttpServerProxyBuilder::new(device).build()
+    }
 
-        Self {
-            client: reqwest::Client::default(),
-            host: constants::OLLANA_SERVER_PROXY_DEFAULT_ADDRESS.to_string(),
-            port: constants::OLLANA_SERVER_PROXY_DEFAULT_PORT,
-            ollama_url,
-            device,
-        }
+    pub fn builder(device: Arc<dyn Device>) -> HttpServerProxyBuilder {
+        HttpServerProxyBuilder::new(device)
     }
 
     fn rustls_config(cert_file: File, key_file: File) -> anyhow::Result<rustls::ServerConfig> {
@@ -388,6 +435,52 @@ mod tests {
         }
     }
 
+    /// Mock Certs implementation for testing
+    struct MockCerts;
+
+    impl Certs for MockCerts {
+        fn gen_device(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn get_device_key_bytes(&self) -> anyhow::Result<Vec<u8>> {
+            Ok(vec![])
+        }
+
+        fn gen_http_server(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn get_http_server_files(&self) -> anyhow::Result<(File, File)> {
+            // Generate self-signed cert for testing
+            let subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+            let cert_key = generate_simple_self_signed(subject_alt_names)?;
+
+            // Create temporary files
+            let cert_file = tempfile::NamedTempFile::new()?;
+            let key_file = tempfile::NamedTempFile::new()?;
+
+            // Write certificate
+            std::io::Write::write_all(&mut cert_file.as_file(), cert_key.cert.pem().as_bytes())?;
+
+            // Write key
+            std::io::Write::write_all(
+                &mut key_file.as_file(),
+                cert_key.signing_key.serialize_pem().as_bytes(),
+            )?;
+
+            // Reopen files for reading
+            let cert_path = cert_file.path().to_path_buf();
+            let key_path = key_file.path().to_path_buf();
+
+            // Keep temp files alive
+            std::mem::forget(cert_file);
+            std::mem::forget(key_file);
+
+            Ok((File::open(cert_path)?, File::open(key_path)?))
+        }
+    }
+
     /// Create rustls config for the test HTTPS server
     fn create_rustls_config() -> anyhow::Result<rustls::ServerConfig> {
         let subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
@@ -404,10 +497,12 @@ mod tests {
         Ok(config)
     }
 
-    /// Helper function to start a mock HTTPS server proxy that responds to LLM requests
-    async fn start_mock_https_server(port: u16) -> anyhow::Result<ServerHandle> {
-        let rustls_config = create_rustls_config()?;
-
+    /// Helper function to start a mock LLM server that responds to LLM requests
+    ///
+    /// # Arguments
+    /// * `port` - The port to bind the server to
+    /// * `use_tls` - Whether to use TLS/HTTPS (true) or plain HTTP (false)
+    async fn start_mock_llm_server(port: u16, use_tls: bool) -> anyhow::Result<ServerHandle> {
         let server = HttpServer::new(move || {
             App::new()
                 .route("/api/version", web::get().to(mock_version_handler))
@@ -415,10 +510,16 @@ mod tests {
                 .route("/api/chat", web::post().to(mock_chat_handler))
                 .route("/api/tags", web::get().to(mock_tags_handler))
                 .default_service(web::to(mock_default_handler))
-        })
-        .bind_rustls_0_23(("127.0.0.1", port), rustls_config)?
-        .workers(1)
-        .run();
+        });
+
+        let server = if use_tls {
+            let rustls_config = create_rustls_config()?;
+            server.bind_rustls_0_23(("127.0.0.1", port), rustls_config)?
+        } else {
+            server.bind(("127.0.0.1", port))?
+        };
+
+        let server = server.workers(1).run();
 
         let handle = server.handle();
         tokio::spawn(server);
@@ -518,9 +619,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_server_starts_successfully() {
+    async fn test_http_client_proxy_run_server_starts_successfully() {
         let mock_server_port = 18080;
-        let mock_server_handle = start_mock_https_server(mock_server_port)
+        let mock_server_handle = start_mock_llm_server(mock_server_port, true)
             .await
             .expect("Failed to start mock server");
 
@@ -552,9 +653,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_server_forwards_requests() {
+    async fn test_http_client_proxy_forwards_requests() {
         let mock_server_port = 18081;
-        let mock_server_handle = start_mock_https_server(mock_server_port)
+        let mock_server_handle = start_mock_llm_server(mock_server_port, true)
             .await
             .expect("Failed to start mock server");
 
@@ -603,9 +704,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_server_forwards_post_requests() {
+    async fn test_http_client_proxy_forwards_post_requests() {
         let mock_server_port = 18082;
-        let mock_server_handle = start_mock_https_server(mock_server_port)
+        let mock_server_handle = start_mock_llm_server(mock_server_port, true)
             .await
             .expect("Failed to start mock server");
 
@@ -661,9 +762,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_server_stop_gracefully() {
+    async fn test_http_client_proxy_stops_gracefully() {
         let mock_server_port = 18083;
-        let mock_server_handle = start_mock_https_server(mock_server_port)
+        let mock_server_handle = start_mock_llm_server(mock_server_port, true)
             .await
             .expect("Failed to start mock server");
 
@@ -715,9 +816,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_server_forwards_query_parameters() {
+    async fn test_http_client_proxy_forwards_query_parameters() {
         let mock_server_port = 18084;
-        let mock_server_handle = start_mock_https_server(mock_server_port)
+        let mock_server_handle = start_mock_llm_server(mock_server_port, true)
             .await
             .expect("Failed to start mock server");
 
@@ -761,9 +862,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_builder_pattern_custom_host_and_port() {
+    async fn test_http_client_proxy_builder_pattern() {
         let mock_server_port = 18085;
-        let mock_server_handle = start_mock_https_server(mock_server_port)
+        let mock_server_handle = start_mock_llm_server(mock_server_port, true)
             .await
             .expect("Failed to start mock server");
 
@@ -803,6 +904,331 @@ mod tests {
         updated_proxy.stop(true).await;
         mock_server_handle.stop(true).await;
 
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    // ===== HttpServerProxy Tests =====
+
+    #[tokio::test]
+    async fn test_http_server_proxy_run_server_starts_successfully() {
+        // Start mock LLM server (simulates Ollama)
+        let mock_llm_port = 19000;
+        let mock_llm_handle = start_mock_llm_server(mock_llm_port, false)
+            .await
+            .expect("Failed to start mock LLM server");
+
+        let device = Arc::new(MockDevice::new("server-test-device-1"));
+        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+
+        let proxy_port = 12000;
+        let proxy = HttpServerProxy::builder(device)
+            .port(proxy_port)
+            .ollama_url(ollama_url)
+            .build();
+
+        let certs = MockCerts;
+
+        // Spawn the proxy server in the background
+        let proxy_handle = tokio::spawn(async move { proxy.run_server(&certs).await });
+
+        // Give the proxy time to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // Verify the proxy is running by making a request to /api/version (which doesn't require auth)
+        let client = reqwest::ClientBuilder::new()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap();
+
+        let response = client
+            .get(format!("https://127.0.0.1:{}/api/version", proxy_port))
+            .send()
+            .await;
+
+        assert!(response.is_ok(), "Proxy should be running and responding");
+        assert_eq!(response.unwrap().status(), 200);
+
+        // Cleanup
+        proxy_handle.abort();
+        mock_llm_handle.stop(true).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn test_http_server_proxy_forwards_authorized_requests() {
+        // Start mock LLM server
+        let mock_llm_port = 19001;
+        let mock_llm_handle = start_mock_llm_server(mock_llm_port, false)
+            .await
+            .expect("Failed to start mock LLM server");
+
+        let device = Arc::new(MockDevice::new("server-test-device-2"));
+        let device_id = device.get_id();
+        device.allow(device_id.clone()).unwrap();
+
+        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+
+        let proxy_port = 12001;
+        let proxy = HttpServerProxy::builder(device)
+            .port(proxy_port)
+            .ollama_url(ollama_url)
+            .build();
+
+        let certs = MockCerts;
+
+        let proxy_handle = tokio::spawn(async move { proxy.run_server(&certs).await });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // Make an authorized request
+        let client = reqwest::ClientBuilder::new()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap();
+
+        let payload = serde_json::json!({
+            "prompt": "Test prompt",
+            "model": "test-model"
+        });
+
+        let response = client
+            .post(format!("https://127.0.0.1:{}/api/generate", proxy_port))
+            .header(HTTP_HEADER_OLLANA_DEVICE_ID, device_id)
+            .json(&payload)
+            .send()
+            .await
+            .expect("Failed to send request");
+
+        assert_eq!(response.status(), 200);
+
+        let body: serde_json::Value = response.json().await.expect("Failed to parse JSON");
+        assert!(body.get("response").is_some());
+        assert!(body
+            .get("response")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("Generated response"));
+
+        // Cleanup
+        proxy_handle.abort();
+        mock_llm_handle.stop(true).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn test_http_server_proxy_rejects_unauthorized_requests() {
+        // Start mock LLM server
+        let mock_llm_port = 19002;
+        let mock_llm_handle = start_mock_llm_server(mock_llm_port, false)
+            .await
+            .expect("Failed to start mock LLM server");
+
+        let device = Arc::new(MockDevice::new("server-test-device-3"));
+        // Note: NOT allowing any device IDs
+
+        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+
+        let proxy_port = 12002;
+        let proxy = HttpServerProxy::builder(device)
+            .port(proxy_port)
+            .ollama_url(ollama_url)
+            .build();
+
+        let certs = MockCerts;
+
+        let proxy_handle = tokio::spawn(async move { proxy.run_server(&certs).await });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // Make an unauthorized request (with wrong device ID)
+        let client = reqwest::ClientBuilder::new()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap();
+
+        let payload = serde_json::json!({
+            "prompt": "Test prompt",
+            "model": "test-model"
+        });
+
+        let response = client
+            .post(format!("https://127.0.0.1:{}/api/generate", proxy_port))
+            .header(HTTP_HEADER_OLLANA_DEVICE_ID, "unauthorized-device")
+            .json(&payload)
+            .send()
+            .await
+            .expect("Failed to send request");
+
+        assert_eq!(response.status(), 401);
+
+        let body = response.text().await.expect("Failed to read body");
+        assert!(body.contains("not authorized"));
+
+        // Cleanup
+        proxy_handle.abort();
+        mock_llm_handle.stop(true).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn test_http_server_proxy_authorize_endpoint() {
+        // Start mock LLM server
+        let mock_llm_port = 19003;
+        let mock_llm_handle = start_mock_llm_server(mock_llm_port, false)
+            .await
+            .expect("Failed to start mock LLM server");
+
+        let device = Arc::new(MockDevice::new("server-test-device-4"));
+        let device_id = device.get_id();
+        device.allow(device_id.clone()).unwrap();
+
+        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+
+        let proxy_port = 12003;
+        let proxy = HttpServerProxy::builder(device)
+            .port(proxy_port)
+            .ollama_url(ollama_url)
+            .build();
+
+        let certs = MockCerts;
+
+        let proxy_handle = tokio::spawn(async move { proxy.run_server(&certs).await });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // Test authorized request
+        let client = reqwest::ClientBuilder::new()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap();
+
+        let response = client
+            .post(format!(
+                "https://127.0.0.1:{}/ollana/api/authorize",
+                proxy_port
+            ))
+            .header(HTTP_HEADER_OLLANA_DEVICE_ID, device_id.clone())
+            .send()
+            .await
+            .expect("Failed to send authorize request");
+
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = response.json().await.expect("Failed to parse JSON");
+        assert_eq!(body.get("device_id").unwrap().as_str().unwrap(), device_id);
+
+        // Test unauthorized request
+        let response = client
+            .post(format!(
+                "https://127.0.0.1:{}/ollana/api/authorize",
+                proxy_port
+            ))
+            .header(HTTP_HEADER_OLLANA_DEVICE_ID, "wrong-device-id")
+            .send()
+            .await
+            .expect("Failed to send authorize request");
+
+        assert_eq!(response.status(), 401);
+
+        // Cleanup
+        proxy_handle.abort();
+        mock_llm_handle.stop(true).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn test_http_server_proxy_version_endpoint_no_auth_required() {
+        // Start mock LLM server
+        let mock_llm_port = 19004;
+        let mock_llm_handle = start_mock_llm_server(mock_llm_port, false)
+            .await
+            .expect("Failed to start mock LLM server");
+
+        let device = Arc::new(MockDevice::new("server-test-device-5"));
+        // Note: NOT allowing any device IDs
+
+        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+
+        let proxy_port = 12004;
+        let proxy = HttpServerProxy::builder(device)
+            .port(proxy_port)
+            .ollama_url(ollama_url)
+            .build();
+
+        let certs = MockCerts;
+
+        let proxy_handle = tokio::spawn(async move { proxy.run_server(&certs).await });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // /api/version should work without authorization
+        let client = reqwest::ClientBuilder::new()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap();
+
+        let response = client
+            .get(format!("https://127.0.0.1:{}/api/version", proxy_port))
+            .send()
+            .await
+            .expect("Failed to send request");
+
+        assert_eq!(response.status(), 200);
+        let body = response.text().await.expect("Failed to read body");
+        assert!(body.contains("version"));
+
+        // Cleanup
+        proxy_handle.abort();
+        mock_llm_handle.stop(true).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn test_http_server_proxy_builder_pattern() {
+        // Start mock LLM server
+        let mock_llm_port = 19005;
+        let mock_llm_handle = start_mock_llm_server(mock_llm_port, false)
+            .await
+            .expect("Failed to start mock LLM server");
+
+        let device = Arc::new(MockDevice::new("server-test-device-6"));
+        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+
+        // Test builder with custom settings
+        let proxy_port = 12005;
+        let custom_host = "127.0.0.1";
+        let proxy = HttpServerProxy::builder(device)
+            .host(custom_host)
+            .port(proxy_port)
+            .ollama_url(ollama_url)
+            .build();
+
+        let certs = MockCerts;
+
+        let proxy_handle = tokio::spawn(async move { proxy.run_server(&certs).await });
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+        // Verify the proxy is running with custom settings
+        let client = reqwest::ClientBuilder::new()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap();
+
+        let response = client
+            .get(format!(
+                "https://{}:{}/api/version",
+                custom_host, proxy_port
+            ))
+            .send()
+            .await
+            .expect("Failed to send request");
+
+        assert_eq!(response.status(), 200);
+
+        // Cleanup
+        proxy_handle.abort();
+        mock_llm_handle.stop(true).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 }
