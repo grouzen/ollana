@@ -21,7 +21,7 @@ use crate::{
     constants,
     manager::ManagerCommand,
     proto::{DiscoveryRequest, DiscoveryResponse, ProviderInfo, ProviderType},
-    provider::{LMStudio, LlamaServer, Ollama as OllamaProvider, Provider, VLLM},
+    provider::{LMStudio, LlamaServer, Ollama, Provider, VLLM},
 };
 
 const RANDOM_UDP_PORT: u16 = 0;
@@ -38,7 +38,7 @@ pub const DEFAULT_ALLOWED_PROVIDERS: &[ProviderType] = &[
 
 pub fn create_default_providers() -> HashMap<ProviderType, Arc<dyn Provider>> {
     let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
-    providers.insert(ProviderType::Ollama, Arc::new(OllamaProvider::default()));
+    providers.insert(ProviderType::Ollama, Arc::new(Ollama::default()));
     providers.insert(ProviderType::Vllm, Arc::new(VLLM::default()));
     providers.insert(ProviderType::LmStudio, Arc::new(LMStudio::default()));
     providers.insert(ProviderType::LlamaServer, Arc::new(LlamaServer::default()));
