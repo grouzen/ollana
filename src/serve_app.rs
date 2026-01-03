@@ -3,11 +3,12 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     args::ServeArgs,
     certs::Certs,
+    client_manager::ClientManager,
+    constants,
     device::Device,
     discovery::{
         create_default_providers, ServerDiscovery, UdpServerDiscovery, DEFAULT_ALLOWED_PROVIDERS,
     },
-    client_manager::ClientManager,
     provider::{Ollama, Provider},
     proxy::{ClientProxy, HttpClientProxy, HttpServerProxy, ServerProxy},
     Mode,
@@ -115,9 +116,16 @@ impl ServeApp {
     }
 
     async fn run_client_mode(&self) -> anyhow::Result<()> {
-        let mut manager = ClientManager::new(self.device.clone(), |server_socket_addr, device| {
-            Ok(Box::new(HttpClientProxy::new(server_socket_addr, device)?) as Box<dyn ClientProxy>)
-        });
+        let mut manager = ClientManager::new(
+            self.device.clone(),
+            |provider_type, server_socket_addr, device| {
+                let default_provider_port = constants::get_default_client_proxy_port(provider_type);
+                let server_socket_addr = (server_socket_addr.ip(), default_provider_port).into();
+
+                Ok(Box::new(HttpClientProxy::new(server_socket_addr, device)?)
+                    as Box<dyn ClientProxy>)
+            },
+        );
 
         info!("Running in Client Mode");
 

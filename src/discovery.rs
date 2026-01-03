@@ -18,8 +18,8 @@ use tokio::{
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
-    constants,
     client_manager::ClientManagerCommand,
+    constants,
     proto::{DiscoveryRequest, DiscoveryResponse, ProviderInfo, ProviderType},
     provider::{LMStudio, LlamaServer, Ollama, Provider, VLLM},
 };
@@ -288,13 +288,15 @@ impl UdpClientDiscovery {
                         .ok_or_else(|| {
                             anyhow::Error::msg(format!(
                                 "Invalid server proxy address for provider {:?} on port {}",
-                                provider_type,
-                                provider_port
+                                provider_type, provider_port
                             ))
                         })?;
 
                     cmd_tx
-                        .send(ClientManagerCommand::Add(provider_type, provider_socket_addr))
+                        .send(ClientManagerCommand::Add(
+                            provider_type,
+                            provider_socket_addr,
+                        ))
                         .await
                         .unwrap_or(());
                 }
@@ -679,10 +681,7 @@ mod tests {
         received_providers.sort_by_key(|&(_, port)| port);
         assert_eq!(
             received_providers,
-            vec![
-                (ProviderType::Vllm, 8000),
-                (ProviderType::Ollama, 11434)
-            ]
+            vec![(ProviderType::Vllm, 8000), (ProviderType::Ollama, 11434)]
         );
 
         handle.abort();

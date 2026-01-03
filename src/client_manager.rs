@@ -34,7 +34,9 @@ pub struct ActiveProxy {
 
 pub struct ClientManager<F>
 where
-    F: Fn(SocketAddr, Arc<dyn Device>) -> anyhow::Result<Box<dyn ClientProxy>> + Send + Sync,
+    F: Fn(ProviderType, SocketAddr, Arc<dyn Device>) -> anyhow::Result<Box<dyn ClientProxy>>
+        + Send
+        + Sync,
 {
     server_queues: HashMap<ProviderType, VecDeque<SocketAddr>>,
     active_proxies: HashMap<ProviderType, ActiveProxy>,
@@ -50,7 +52,9 @@ pub enum ClientManagerCommand {
 
 impl<F> ClientManager<F>
 where
-    F: Fn(SocketAddr, Arc<dyn Device>) -> anyhow::Result<Box<dyn ClientProxy>> + Send + Sync,
+    F: Fn(ProviderType, SocketAddr, Arc<dyn Device>) -> anyhow::Result<Box<dyn ClientProxy>>
+        + Send
+        + Sync,
 {
     pub fn new(device: Arc<dyn Device>, proxy_factory: F) -> Self {
         Self {
@@ -158,10 +162,7 @@ where
         cmd_tx: &Sender<ClientManagerCommand>,
     ) -> anyhow::Result<()> {
         // Get or create the queue for this provider type
-        let server_queue = self
-            .server_queues
-            .entry(provider_type)
-            .or_insert_with(VecDeque::new);
+        let server_queue = self.server_queues.entry(provider_type).or_default();
 
         // Don't do anything for the already added server
         let already_exists = server_queue
@@ -220,7 +221,8 @@ where
         ollama: Ollama,
         cmd_tx: &Sender<ClientManagerCommand>,
     ) -> anyhow::Result<()> {
-        let mut client_proxy = (self.proxy_factory)(server_socket_addr, self.device.clone())?;
+        let mut client_proxy =
+            (self.proxy_factory)(provider_type, server_socket_addr, self.device.clone())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         info!(
@@ -281,7 +283,10 @@ where
                         );
 
                         cmd_tx
-                            .send(ClientManagerCommand::Remove(provider_type, server_socket_addr))
+                            .send(ClientManagerCommand::Remove(
+                                provider_type,
+                                server_socket_addr,
+                            ))
                             .await
                             .unwrap_or(())
                     }
