@@ -8,7 +8,7 @@ use crate::{
         create_default_providers, ServerDiscovery, UdpServerDiscovery, DEFAULT_ALLOWED_PROVIDERS,
     },
     manager::Manager,
-    ollama::Ollama,
+    provider::{Ollama, Provider},
     proxy::{ClientProxy, HttpClientProxy, HttpServerProxy, ServerProxy},
     Mode,
 };
@@ -73,7 +73,7 @@ impl ServeApp {
             return Mode::Server;
         }
 
-        match self.local_ollama.get_version().await {
+        match self.local_ollama.health_check().await {
             Ok(_) => Mode::Server,
             Err(_) => Mode::Client,
         }

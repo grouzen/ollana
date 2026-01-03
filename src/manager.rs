@@ -11,8 +11,8 @@ use tokio_stream::wrappers::IntervalStream;
 use crate::{
     device::Device,
     discovery::{ClientDiscovery, UdpClientDiscovery},
-    ollama::Ollama,
     ollana::{HttpOllana, Ollana},
+    provider::{Ollama, Provider},
     proxy::ClientProxy,
 };
 use log::{debug, error, info};
@@ -154,7 +154,7 @@ where
                 // Check if the server's device_id is allowed on the client
                 if self.device.is_allowed(server_device_id.clone()) {
                     // Check if the server is proxying requests and has a running Ollama instance
-                    match ollama.get_version().await {
+                    match ollama.health_check().await {
                         Ok(_) => {
                             // Add new server to the end of queue
                             self.servers.push_back(server);
@@ -224,7 +224,7 @@ where
             while stream.next().await.is_some() {
                 debug!("Executing liveness check for address {}", server);
 
-                match ollama.get_version().await {
+                match ollama.health_check().await {
                     Ok(_) => (),
                     Err(_) => {
                         info!("Deregistering an Ollana proxy for address {}", server);

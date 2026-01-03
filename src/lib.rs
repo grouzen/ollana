@@ -7,7 +7,6 @@ pub mod constants;
 pub mod device;
 pub mod discovery;
 pub mod manager;
-pub mod ollama;
 pub mod ollana;
 pub mod provider;
 pub mod proxy;
