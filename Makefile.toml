@@ -1,3 +1,7 @@
+[tasks.test]
+command = "cargo"
+args = ["test"]
+
 [tasks.format]
 install_crate = "rustfmt"
 command = "cargo"
@@ -13,6 +17,7 @@ args = ["clippy", "--no-deps", "--all-features", "--all-targets", "--", "-D", "w
 
 [tasks.check-all]
 dependencies = [
+    "test",
     "format",
     "lint",
     "build",

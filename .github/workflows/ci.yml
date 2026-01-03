@@ -21,6 +21,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - uses: moonrepo/setup-rust@v1
         with:
           components: rustfmt
@@ -33,6 +36,12 @@ jobs:
           components: clippy
       - name: Run Clippy
         run: cargo make lint
+      
+      - uses: moonrepo/setup-rust@v1
+        with:
+          bins: cargo-make
+      - name: Tests
+        run: cargo make test
 
   build:
     name: Build
@@ -62,6 +71,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         
+      - name: Install protobuf compiler (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protobuf compiler (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
       - name: Install cross
         if: matrix.use-cross
         uses: taiki-e/install-action@v2

@@ -2,14 +2,20 @@ use std::path::PathBuf;
 
 pub mod args;
 pub mod certs;
+pub mod client_manager;
+pub mod config;
 pub mod constants;
 pub mod device;
 pub mod discovery;
-pub mod manager;
-pub mod ollama;
 pub mod ollana;
+pub mod provider;
 pub mod proxy;
 pub mod serve_app;
+
+// Include generated protobuf code
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/ollana.discovery.rs"));
+}
 
 pub const HTTP_HEADER_OLLANA_DEVICE_ID: &str = "X-Ollana-Device-Id";
 
@@ -32,7 +38,7 @@ pub enum Mode {
 /// # Errors
 /// This function can return an `anyhow::Error` if it fails to determine the data local directory.
 ///
-fn get_local_dir() -> anyhow::Result<PathBuf> {
+pub fn get_local_dir() -> anyhow::Result<PathBuf> {
     dirs::data_local_dir()
         .map(|p| p.join("ollana"))
         .ok_or(anyhow::Error::msg(
