@@ -59,6 +59,17 @@ impl<C: ProviderConfig> LLMServer<C> {
             _phantom: std::marker::PhantomData,
         })
     }
+
+    pub fn default_with_port(port: u16) -> Self {
+        let url = format!("http://{}:{}", C::DEFAULT_ADDRESS, port);
+        let url = Url::parse(&url).unwrap();
+
+        Self {
+            url,
+            port,
+            ..Default::default()
+        }
+    }
 }
 
 #[async_trait::async_trait]
