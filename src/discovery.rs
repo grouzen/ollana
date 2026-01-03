@@ -19,7 +19,7 @@ use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
     constants,
-    manager::ManagerCommand,
+    client_manager::ClientManagerCommand,
     proto::{DiscoveryRequest, DiscoveryResponse, ProviderInfo, ProviderType},
     provider::{LMStudio, LlamaServer, Ollama, Provider, VLLM},
 };
@@ -186,7 +186,7 @@ impl ServerDiscoveryNetwork for UdpServerDiscoveryNetwork {
 #[async_trait]
 pub trait ClientDiscovery: Send + Sync {
     /// Run the client discovery process.
-    async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()>;
+    async fn run(&self, cmd_tx: &Sender<ClientManagerCommand>) -> anyhow::Result<()>;
 }
 
 /// Trait for server-side discovery operations.
@@ -264,30 +264,37 @@ impl UdpClientDiscovery {
     }
 
     /// Handle incoming discovery responses from servers.
-    async fn handle_messages(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
+    async fn handle_messages(&self, cmd_tx: &Sender<ClientManagerCommand>) -> anyhow::Result<()> {
         loop {
-            if let Ok((response, addr)) = self.network.recv().await {
+            if let Ok((response, server_socket_addr)) = self.network.recv().await {
                 debug!(
                     "Client discovery found a server with {} provider(s) at {}",
                     response.provider_info.len(),
-                    addr
+                    server_socket_addr
                 );
 
                 for provider_info in response.provider_info {
+                    let provider_type = ProviderType::try_from(provider_info.provider_type)
+                        .map_err(|_| {
+                            anyhow::Error::msg(format!(
+                                "Unknown provider type: {}",
+                                provider_info.provider_type
+                            ))
+                        })?;
                     let provider_port = provider_info.port as u16;
-                    let http_addr = (addr.ip(), provider_port)
+                    let provider_socket_addr = (server_socket_addr.ip(), provider_port)
                         .to_socket_addrs()?
                         .next()
                         .ok_or_else(|| {
                             anyhow::Error::msg(format!(
                                 "Invalid server proxy address for provider {:?} on port {}",
-                                ProviderType::try_from(provider_info.provider_type),
+                                provider_type,
                                 provider_port
                             ))
                         })?;
 
                     cmd_tx
-                        .send(ManagerCommand::Add(http_addr))
+                        .send(ClientManagerCommand::Add(provider_type, provider_socket_addr))
                         .await
                         .unwrap_or(());
                 }
@@ -298,7 +305,7 @@ impl UdpClientDiscovery {
 
 #[async_trait]
 impl ClientDiscovery for UdpClientDiscovery {
-    async fn run(&self, cmd_tx: &Sender<ManagerCommand>) -> anyhow::Result<()> {
+    async fn run(&self, cmd_tx: &Sender<ClientManagerCommand>) -> anyhow::Result<()> {
         info!("Running client discovery...");
 
         tokio::select! {
@@ -368,7 +375,7 @@ impl UdpServerDiscovery {
     /// Handle incoming discovery requests from clients.
     async fn handle_messages(&self) -> anyhow::Result<()> {
         loop {
-            if let Ok((request, addr)) = self.network.recv().await {
+            if let Ok((request, client_socket_addr)) = self.network.recv().await {
                 debug!(
                     "Server discovery parsed request with {} allowed provider(s)",
                     request.allowed_providers.len()
@@ -386,12 +393,12 @@ impl UdpServerDiscovery {
                     // Build response while holding lock
                     let provider_info: Vec<ProviderInfo> = alive_providers
                         .iter()
-                        .filter_map(|(provider_type, &port)| {
+                        .filter_map(|(provider_type, &provider_port)| {
                             let provider_type_i32 = *provider_type as i32;
                             if request.allowed_providers.contains(&provider_type_i32) {
                                 Some(ProviderInfo {
                                     provider_type: provider_type_i32,
-                                    port: port as u32,
+                                    port: provider_port as u32,
                                 })
                             } else {
                                 None
@@ -401,7 +408,7 @@ impl UdpServerDiscovery {
 
                     let response = DiscoveryResponse { provider_info };
                     drop(alive_providers); // Release lock before async send
-                    let _ = self.network.send(&response, addr).await;
+                    let _ = self.network.send(&response, client_socket_addr).await;
                 }
             }
         }
@@ -420,20 +427,21 @@ impl UdpServerDiscovery {
                 if let Some(provider) = self.providers.get(provider_type) {
                     match provider.health_check().await {
                         Ok(true) => {
-                            let port = provider.get_port();
+                            let provider_port = provider.get_port();
+
                             if !alive_providers.contains_key(provider_type) {
                                 info!(
                                     "Detected {:?} is running on port {}, will start responding for this provider",
-                                    provider_type, port
+                                    provider_type, provider_port
                                 );
-                                alive_providers.insert(*provider_type, port);
+                                alive_providers.insert(*provider_type, provider_port);
                             }
                         }
                         Ok(false) | Err(_) => {
-                            if let Some(port) = alive_providers.remove(provider_type) {
+                            if let Some(provider_port) = alive_providers.remove(provider_type) {
                                 info!(
                                     "Detected {:?} on port {} is no longer running, will stop responding for this provider",
-                                    provider_type, port
+                                    provider_type, provider_port
                                 );
                             }
                         }
@@ -592,7 +600,7 @@ mod tests {
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
         );
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientManagerCommand>(32);
 
         // Run client discovery in a separate task with a timeout
         let handle = tokio::spawn(async move {
@@ -606,11 +614,12 @@ mod tests {
             .expect("channel closed");
 
         match cmd {
-            ManagerCommand::Add(addr) => {
+            ClientManagerCommand::Add(provider_type, addr) => {
+                assert_eq!(provider_type, ProviderType::Ollama);
                 assert_eq!(addr.ip(), server_addr.ip());
                 assert_eq!(addr.port(), provider_port as u16);
             }
-            _ => panic!("expected ManagerCommand::Add"),
+            _ => panic!("expected ClientManagerCommand::Add"),
         }
 
         handle.abort();
@@ -644,14 +653,14 @@ mod tests {
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
         );
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientManagerCommand>(32);
 
         let handle = tokio::spawn(async move {
             let _ = client.run(&cmd_tx).await;
         });
 
         // Collect both commands
-        let mut received_ports = Vec::new();
+        let mut received_providers = Vec::new();
         for _ in 0..2 {
             let cmd = tokio::time::timeout(Duration::from_millis(100), cmd_rx.recv())
                 .await
@@ -659,16 +668,22 @@ mod tests {
                 .expect("channel closed");
 
             match cmd {
-                ManagerCommand::Add(addr) => {
+                ClientManagerCommand::Add(provider_type, addr) => {
                     assert_eq!(addr.ip(), server_addr.ip());
-                    received_ports.push(addr.port());
+                    received_providers.push((provider_type, addr.port()));
                 }
-                _ => panic!("expected ManagerCommand::Add"),
+                _ => panic!("expected ClientManagerCommand::Add"),
             }
         }
 
-        received_ports.sort();
-        assert_eq!(received_ports, vec![8000, 11434]);
+        received_providers.sort_by_key(|&(_, port)| port);
+        assert_eq!(
+            received_providers,
+            vec![
+                (ProviderType::Vllm, 8000),
+                (ProviderType::Ollama, 11434)
+            ]
+        );
 
         handle.abort();
     }
@@ -704,7 +719,7 @@ mod tests {
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
         );
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientManagerCommand>(32);
 
         let handle = tokio::spawn(async move {
             let _ = client.run(&cmd_tx).await;
@@ -717,11 +732,12 @@ mod tests {
             .expect("channel closed");
 
         match cmd1 {
-            ManagerCommand::Add(addr) => {
+            ClientManagerCommand::Add(provider_type, addr) => {
+                assert_eq!(provider_type, ProviderType::Ollama);
                 assert_eq!(addr.ip(), server1_addr.ip());
                 assert_eq!(addr.port(), 11434);
             }
-            _ => panic!("expected ManagerCommand::Add"),
+            _ => panic!("expected ClientManagerCommand::Add"),
         }
 
         // Second command should be from server2
@@ -731,11 +747,12 @@ mod tests {
             .expect("channel closed");
 
         match cmd2 {
-            ManagerCommand::Add(addr) => {
+            ClientManagerCommand::Add(provider_type, addr) => {
+                assert_eq!(provider_type, ProviderType::Vllm);
                 assert_eq!(addr.ip(), server2_addr.ip());
                 assert_eq!(addr.port(), 8000);
             }
-            _ => panic!("expected ManagerCommand::Add"),
+            _ => panic!("expected ClientManagerCommand::Add"),
         }
 
         handle.abort();
@@ -760,7 +777,7 @@ mod tests {
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
         );
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ManagerCommand>(32);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientManagerCommand>(32);
 
         let handle = tokio::spawn(async move {
             let _ = client.run(&cmd_tx).await;

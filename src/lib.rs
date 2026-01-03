@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 pub mod args;
 pub mod certs;
+pub mod client_manager;
 pub mod config;
 pub mod constants;
 pub mod device;
 pub mod discovery;
-pub mod manager;
 pub mod ollana;
 pub mod provider;
 pub mod proxy;

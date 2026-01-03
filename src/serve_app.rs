@@ -7,7 +7,7 @@ use crate::{
     discovery::{
         create_default_providers, ServerDiscovery, UdpServerDiscovery, DEFAULT_ALLOWED_PROVIDERS,
     },
-    manager::Manager,
+    client_manager::ClientManager,
     provider::{Ollama, Provider},
     proxy::{ClientProxy, HttpClientProxy, HttpServerProxy, ServerProxy},
     Mode,
@@ -115,8 +115,8 @@ impl ServeApp {
     }
 
     async fn run_client_mode(&self) -> anyhow::Result<()> {
-        let mut manager = Manager::new(self.device.clone(), |server, device| {
-            Ok(Box::new(HttpClientProxy::new(server, device)?) as Box<dyn ClientProxy>)
+        let mut manager = ClientManager::new(self.device.clone(), |server_socket_addr, device| {
+            Ok(Box::new(HttpClientProxy::new(server_socket_addr, device)?) as Box<dyn ClientProxy>)
         });
 
         info!("Running in Client Mode");
