@@ -36,13 +36,23 @@ pub const DEFAULT_ALLOWED_PROVIDERS: &[ProviderType] = &[
     ProviderType::LlamaServer,
 ];
 
-pub fn create_default_providers() -> HashMap<ProviderType, Arc<dyn Provider>> {
+fn create_default_providers() -> HashMap<ProviderType, Arc<dyn Provider>> {
     let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
     providers.insert(ProviderType::Ollama, Arc::new(Ollama::default()));
     providers.insert(ProviderType::Vllm, Arc::new(VLLM::default()));
     providers.insert(ProviderType::LmStudio, Arc::new(LMStudio::default()));
     providers.insert(ProviderType::LlamaServer, Arc::new(LlamaServer::default()));
     providers
+}
+
+pub fn convert_providers_to_server_proxy_ports(
+    providers: &HashMap<ProviderType, Arc<dyn Provider>>,
+) -> HashMap<ProviderType, u16> {
+    let mut proxy_ports = HashMap::new();
+    for (provider_type, provider) in providers {
+        proxy_ports.insert(*provider_type, provider.get_port() + 1);
+    }
+    proxy_ports
 }
 
 /// Trait for abstracting network operations in ClientDiscovery.
@@ -209,6 +219,7 @@ pub struct UdpServerDiscovery {
     network: Arc<dyn ServerDiscoveryNetwork>,
     providers: HashMap<ProviderType, Arc<dyn Provider>>,
     alive_providers: Arc<Mutex<HashMap<ProviderType, u16>>>,
+    proxy_ports: HashMap<ProviderType, u16>,
     allowed_providers: Vec<ProviderType>,
     liveness_interval: std::time::Duration,
 }
@@ -322,6 +333,7 @@ impl UdpServerDiscovery {
         port: u16,
         providers: HashMap<ProviderType, Arc<dyn Provider>>,
         allowed_providers: Vec<ProviderType>,
+        proxy_ports: HashMap<ProviderType, u16>,
         liveness_interval: Duration,
     ) -> io::Result<Self> {
         let network = UdpServerDiscoveryNetwork::new(port).await?;
@@ -330,6 +342,7 @@ impl UdpServerDiscovery {
             network: Arc::new(network),
             providers,
             alive_providers: Arc::new(Mutex::new(HashMap::new())),
+            proxy_ports,
             allowed_providers,
             liveness_interval,
         })
@@ -337,10 +350,13 @@ impl UdpServerDiscovery {
 
     pub async fn with_defaults() -> io::Result<Self> {
         let providers = create_default_providers();
+        let proxy_ports = convert_providers_to_server_proxy_ports(&providers);
+
         Self::new(
             constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
             providers,
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
+            proxy_ports,
             DEFAULT_SERVER_LIVENESS_INTERVAL,
         )
         .await
@@ -350,10 +366,29 @@ impl UdpServerDiscovery {
         providers: HashMap<ProviderType, Arc<dyn Provider>>,
         allowed_providers: Vec<ProviderType>,
     ) -> io::Result<Self> {
+        let proxy_ports = convert_providers_to_server_proxy_ports(&providers);
+
         Self::new(
             constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
             providers,
             allowed_providers,
+            proxy_ports,
+            DEFAULT_SERVER_LIVENESS_INTERVAL,
+        )
+        .await
+    }
+
+    /// Create UdpServerDiscovery with custom providers and proxy ports
+    pub async fn with_providers_and_ports(
+        providers: HashMap<ProviderType, Arc<dyn Provider>>,
+        allowed_providers: Vec<ProviderType>,
+        proxy_ports: HashMap<ProviderType, u16>,
+    ) -> io::Result<Self> {
+        Self::new(
+            constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
+            providers,
+            allowed_providers,
+            proxy_ports,
             DEFAULT_SERVER_LIVENESS_INTERVAL,
         )
         .await
@@ -363,12 +398,14 @@ impl UdpServerDiscovery {
         network: Arc<dyn ServerDiscoveryNetwork>,
         providers: HashMap<ProviderType, Arc<dyn Provider>>,
         allowed_providers: Vec<ProviderType>,
+        proxy_ports: HashMap<ProviderType, u16>,
         liveness_interval: Duration,
     ) -> Self {
         Self {
             network,
             providers,
             alive_providers: Arc::new(Mutex::new(HashMap::new())),
+            proxy_ports,
             allowed_providers,
             liveness_interval,
         }
@@ -392,15 +429,22 @@ impl UdpServerDiscovery {
                 });
 
                 if has_matching_providers {
-                    // Build response while holding lock
+                    // Build response with proxy ports (not LLM ports)
                     let provider_info: Vec<ProviderInfo> = alive_providers
                         .iter()
                         .filter_map(|(provider_type, &provider_port)| {
                             let provider_type_i32 = *provider_type as i32;
                             if request.allowed_providers.contains(&provider_type_i32) {
+                                // Use proxy port from mappings, not the LLM port
+                                let proxy_port = self
+                                    .proxy_ports
+                                    .get(provider_type)
+                                    .copied()
+                                    .unwrap_or(provider_port + 1); // Fallback to LLM port + 1
+
                                 Some(ProviderInfo {
                                     provider_type: provider_type_i32,
-                                    port: provider_port as u32,
+                                    port: proxy_port as u32,
                                 })
                             } else {
                                 None
@@ -835,10 +879,13 @@ mod tests {
         mock_network: Arc<MockServerDiscoveryNetwork>,
         alive_providers: HashMap<ProviderType, u16>,
     ) -> UdpServerDiscovery {
+        let proxy_ports = alive_providers.clone();
+
         let server = UdpServerDiscovery::with_network(
             mock_network,
             HashMap::new(), // providers not needed for handle_messages tests
             DEFAULT_ALLOWED_PROVIDERS.to_vec(),
+            proxy_ports,
             DEFAULT_SERVER_LIVENESS_INTERVAL,
         );
         // Set alive providers directly
@@ -1066,10 +1113,13 @@ mod tests {
         allowed_providers: Vec<ProviderType>,
     ) -> UdpServerDiscovery {
         let mock_network = Arc::new(MockServerDiscoveryNetwork::new(vec![]));
+        let proxy_ports = convert_providers_to_server_proxy_ports(&providers);
+
         UdpServerDiscovery::with_network(
             mock_network,
             providers,
             allowed_providers,
+            proxy_ports,
             Duration::from_millis(10), // Short interval for tests
         )
     }

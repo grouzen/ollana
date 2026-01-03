@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use clap::Parser;
 
 #[derive(Parser)]
@@ -49,6 +51,29 @@ impl std::str::FromStr for ProviderType {
     }
 }
 
+impl From<ProviderType> for crate::proto::ProviderType {
+    fn from(provider: ProviderType) -> Self {
+        match provider {
+            ProviderType::Ollama => crate::proto::ProviderType::Ollama,
+            ProviderType::Vllm => crate::proto::ProviderType::Vllm,
+            ProviderType::LmStudio => crate::proto::ProviderType::LmStudio,
+            ProviderType::LlamaServer => crate::proto::ProviderType::LlamaServer,
+        }
+    }
+}
+
+impl From<crate::proto::ProviderType> for ProviderType {
+    fn from(provider: crate::proto::ProviderType) -> Self {
+        match provider {
+            crate::proto::ProviderType::Ollama => ProviderType::Ollama,
+            crate::proto::ProviderType::Vllm => ProviderType::Vllm,
+            crate::proto::ProviderType::LmStudio => ProviderType::LmStudio,
+            crate::proto::ProviderType::LlamaServer => ProviderType::LlamaServer,
+            crate::proto::ProviderType::Unspecified => ProviderType::Ollama, // Default fallback
+        }
+    }
+}
+
 /// Parse a port number string into u16
 fn parse_port(s: &str) -> Result<u16, String> {
     s.parse::<u16>()
@@ -56,7 +81,7 @@ fn parse_port(s: &str) -> Result<u16, String> {
 }
 
 /// Port mapping configuration for a provider
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortMapping {
     /// First port (server: LLM port, client: server proxy port)
     pub port1: Option<u16>,
@@ -195,6 +220,26 @@ impl ServeArgs {
             ProviderType::LmStudio => self.lmstudio_ports.as_ref(),
             ProviderType::LlamaServer => self.llama_server_ports.as_ref(),
         }
+    }
+
+    /// Get all port mappings
+    pub fn get_port_mappings(&self) -> HashMap<ProviderType, PortMapping> {
+        let mut mappings = HashMap::new();
+
+        if let Some(ollama_mapping) = self.ollama_ports {
+            mappings.insert(ProviderType::Ollama, ollama_mapping);
+        }
+        if let Some(vllm_mapping) = self.vllm_ports {
+            mappings.insert(ProviderType::Vllm, vllm_mapping);
+        }
+        if let Some(lmstudio_mapping) = self.lmstudio_ports {
+            mappings.insert(ProviderType::LmStudio, lmstudio_mapping);
+        }
+        if let Some(llama_server_mapping) = self.llama_server_ports {
+            mappings.insert(ProviderType::LlamaServer, llama_server_mapping);
+        }
+
+        mappings
     }
 
     /// Get all allowed provider types
