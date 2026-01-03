@@ -183,7 +183,7 @@ pub struct HttpServerProxyBuilder {
     device: Arc<dyn Device>,
     host: Option<String>,
     port: Option<u16>,
-    ollama_url: Option<Url>,
+    provider_url: Option<Url>,
 }
 
 impl HttpServerProxyBuilder {
@@ -192,7 +192,7 @@ impl HttpServerProxyBuilder {
             device,
             host: None,
             port: None,
-            ollama_url: None,
+            provider_url: None,
         }
     }
 
@@ -206,13 +206,14 @@ impl HttpServerProxyBuilder {
         self
     }
 
-    pub fn ollama_url(mut self, url: Url) -> Self {
-        self.ollama_url = Some(url);
+    // TODO: provider_url must be required and passed from server_manager
+    pub fn provider_url(mut self, url: Url) -> Self {
+        self.provider_url = Some(url);
         self
     }
 
     pub fn build(self) -> HttpServerProxy {
-        let ollama_url = self.ollama_url.unwrap_or_else(|| {
+        let provider_url = self.provider_url.unwrap_or_else(|| {
             let url_str = format!(
                 "http://{}:{}",
                 constants::OLLAMA_DEFAULT_ADDRESS,
@@ -229,7 +230,7 @@ impl HttpServerProxyBuilder {
             port: self
                 .port
                 .unwrap_or(constants::OLLANA_SERVER_PROXY_DEFAULT_PORT),
-            ollama_url,
+            provider_url,
             device: self.device,
         }
     }
@@ -239,7 +240,7 @@ pub struct HttpServerProxy {
     client: reqwest::Client,
     host: String,
     port: u16,
-    ollama_url: Url,
+    provider_url: Url,
     device: Arc<dyn Device>,
 }
 
@@ -307,7 +308,7 @@ impl HttpServerProxy {
     async fn forward(
         req: HttpRequest,
         client: web::Data<reqwest::Client>,
-        ollama_url: web::Data<Url>,
+        provider_url: web::Data<Url>,
         device: web::Data<Arc<dyn Device>>,
         mut payload: web::Payload,
         method: actix_web::http::Method,
@@ -323,27 +324,27 @@ impl HttpServerProxy {
                 }
             });
 
-            let mut ollama_uri = (**ollama_url).clone();
-            ollama_uri.set_path(req.uri().path());
-            ollama_uri.set_query(req.uri().query());
+            let mut provider_uri = (**provider_url).clone();
+            provider_uri.set_path(req.uri().path());
+            provider_uri.set_query(req.uri().query());
 
-            let ollama_request = client
+            let provider_request = client
                 .request(
                     reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap(),
-                    ollama_uri,
+                    provider_uri,
                 )
                 .body(reqwest::Body::wrap_stream(UnboundedReceiverStream::new(rx)));
 
-            let ollama_response = ollama_request
+            let provider_response = provider_request
                 .send()
                 .await
                 .map_err(error::ErrorInternalServerError)?;
 
             let mut response = HttpResponse::build(
-                actix_web::http::StatusCode::from_u16(ollama_response.status().as_u16()).unwrap(),
+                actix_web::http::StatusCode::from_u16(provider_response.status().as_u16()).unwrap(),
             );
 
-            Ok(response.streaming(ollama_response.bytes_stream()))
+            Ok(response.streaming(provider_response.bytes_stream()))
         } else {
             Ok(HttpResponse::Unauthorized()
                 .content_type("text/plan")
@@ -356,7 +357,7 @@ impl HttpServerProxy {
 impl ServerProxy for HttpServerProxy {
     async fn run_server(&self, certs: &dyn Certs) -> anyhow::Result<()> {
         let client = self.client.clone();
-        let ollama_url = self.ollama_url.clone();
+        let provider_url = self.provider_url.clone();
         let device = self.device.clone();
 
         let (cert_file, key_file) = certs.get_http_server_files()?;
@@ -365,7 +366,7 @@ impl ServerProxy for HttpServerProxy {
         let server = HttpServer::new(move || {
             App::new()
                 .app_data(web::Data::new(client.clone()))
-                .app_data(web::Data::new(ollama_url.clone()))
+                .app_data(web::Data::new(provider_url.clone()))
                 .app_data(web::Data::new(device.clone()))
                 .service(
                     web::scope("/ollana/api").route("/authorize", web::post().to(Self::authorize)),
@@ -918,12 +919,12 @@ mod tests {
             .expect("Failed to start mock LLM server");
 
         let device = Arc::new(MockDevice::new("server-test-device-1"));
-        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+        let provider_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
 
         let proxy_port = 12000;
         let proxy = HttpServerProxy::builder(device)
             .port(proxy_port)
-            .ollama_url(ollama_url)
+            .provider_url(provider_url)
             .build();
 
         let certs = MockCerts;
@@ -966,12 +967,12 @@ mod tests {
         let device_id = device.get_id();
         device.allow(device_id.clone()).unwrap();
 
-        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+        let provider_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
 
         let proxy_port = 12001;
         let proxy = HttpServerProxy::builder(device)
             .port(proxy_port)
-            .ollama_url(ollama_url)
+            .provider_url(provider_url)
             .build();
 
         let certs = MockCerts;
@@ -1027,12 +1028,12 @@ mod tests {
         let device = Arc::new(MockDevice::new("server-test-device-3"));
         // Note: NOT allowing any device IDs
 
-        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+        let provider_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
 
         let proxy_port = 12002;
         let proxy = HttpServerProxy::builder(device)
             .port(proxy_port)
-            .ollama_url(ollama_url)
+            .provider_url(provider_url)
             .build();
 
         let certs = MockCerts;
@@ -1083,12 +1084,12 @@ mod tests {
         let device_id = device.get_id();
         device.allow(device_id.clone()).unwrap();
 
-        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+        let provider_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
 
         let proxy_port = 12003;
         let proxy = HttpServerProxy::builder(device)
             .port(proxy_port)
-            .ollama_url(ollama_url)
+            .provider_url(provider_url)
             .build();
 
         let certs = MockCerts;
@@ -1147,12 +1148,12 @@ mod tests {
         let device = Arc::new(MockDevice::new("server-test-device-5"));
         // Note: NOT allowing any device IDs
 
-        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+        let provider_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
 
         let proxy_port = 12004;
         let proxy = HttpServerProxy::builder(device)
             .port(proxy_port)
-            .ollama_url(ollama_url)
+            .provider_url(provider_url)
             .build();
 
         let certs = MockCerts;
@@ -1192,7 +1193,7 @@ mod tests {
             .expect("Failed to start mock LLM server");
 
         let device = Arc::new(MockDevice::new("server-test-device-6"));
-        let ollama_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
+        let provider_url = Url::parse(&format!("http://127.0.0.1:{}", mock_llm_port)).unwrap();
 
         // Test builder with custom settings
         let proxy_port = 12005;
@@ -1200,7 +1201,7 @@ mod tests {
         let proxy = HttpServerProxy::builder(device)
             .host(custom_host)
             .port(proxy_port)
-            .ollama_url(ollama_url)
+            .provider_url(provider_url)
             .build();
 
         let certs = MockCerts;
