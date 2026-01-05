@@ -629,8 +629,11 @@ mod tests {
         let device = Arc::new(MockDevice::new("test-device-1"));
         let server_addr: SocketAddr = format!("127.0.0.1:{}", mock_server_port).parse().unwrap();
 
-        let mut proxy =
-            HttpClientProxy::new(server_addr, device).expect("Failed to create HttpClientProxy");
+        let proxy_port = 11433;
+        let mut proxy = HttpClientProxy::builder(server_addr, device)
+            .port(proxy_port)
+            .build()
+            .expect("Failed to create HttpClientProxy");
 
         let (tx, rx) = oneshot::channel();
 
