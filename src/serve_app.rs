@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::{
-    args::{PortMapping, ServeArgs},
+    args::ServeArgs,
     certs::Certs,
     client_manager::ClientManager,
     constants,
@@ -10,7 +10,7 @@ use crate::{
     proto::ProviderType,
     provider::{LMStudio, LlamaServer, Ollama, Provider, VLLM},
     proxy::{ClientProxy, HttpClientProxy, HttpServerProxy, ServerProxy},
-    Mode,
+    Mode, PortMapping,
 };
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
 use futures_util::TryFutureExt;
@@ -149,6 +149,7 @@ impl ServeApp {
 
     async fn run_client_mode(&self) -> anyhow::Result<()> {
         let port_mappings = self.port_mappings.clone();
+        let allowed_providers = self.allowed_providers.clone();
 
         let mut manager = ClientManager::new(
             self.device.clone(),
@@ -176,6 +177,7 @@ impl ServeApp {
                         .build()?,
                 ) as Box<dyn ClientProxy>)
             },
+            allowed_providers,
         );
 
         info!("Running in Client Mode");

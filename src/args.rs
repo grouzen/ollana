@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use clap::Parser;
 
+use crate::{PortMapping, ProviderType};
+
 #[derive(Parser)]
 #[command(name = "ollana")]
 #[command(bin_name = "ollana")]
@@ -12,128 +14,6 @@ pub enum Args {
     #[clap(subcommand)]
     /// Manage devices
     Device(DeviceCommands),
-}
-
-/// Provider type enumeration matching the protobuf definition
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ProviderType {
-    Ollama,
-    Vllm,
-    LmStudio,
-    LlamaServer,
-}
-
-impl std::fmt::Display for ProviderType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProviderType::Ollama => write!(f, "ollama"),
-            ProviderType::Vllm => write!(f, "vllm"),
-            ProviderType::LmStudio => write!(f, "lm-studio"),
-            ProviderType::LlamaServer => write!(f, "llama-server"),
-        }
-    }
-}
-
-impl std::str::FromStr for ProviderType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ollama" => Ok(ProviderType::Ollama),
-            "vllm" => Ok(ProviderType::Vllm),
-            "lm-studio" => Ok(ProviderType::LmStudio),
-            "llama-server" => Ok(ProviderType::LlamaServer),
-            _ => Err(format!(
-                "Invalid provider type: {}. Valid values: ollama, vllm, lm-studio, llama-server",
-                s
-            )),
-        }
-    }
-}
-
-impl From<ProviderType> for crate::proto::ProviderType {
-    fn from(provider: ProviderType) -> Self {
-        match provider {
-            ProviderType::Ollama => crate::proto::ProviderType::Ollama,
-            ProviderType::Vllm => crate::proto::ProviderType::Vllm,
-            ProviderType::LmStudio => crate::proto::ProviderType::LmStudio,
-            ProviderType::LlamaServer => crate::proto::ProviderType::LlamaServer,
-        }
-    }
-}
-
-impl From<crate::proto::ProviderType> for ProviderType {
-    fn from(provider: crate::proto::ProviderType) -> Self {
-        match provider {
-            crate::proto::ProviderType::Ollama => ProviderType::Ollama,
-            crate::proto::ProviderType::Vllm => ProviderType::Vllm,
-            crate::proto::ProviderType::LmStudio => ProviderType::LmStudio,
-            crate::proto::ProviderType::LlamaServer => ProviderType::LlamaServer,
-            crate::proto::ProviderType::Unspecified => ProviderType::Ollama, // Default fallback
-        }
-    }
-}
-
-/// Parse a port number string into u16
-fn parse_port(s: &str) -> Result<u16, String> {
-    s.parse::<u16>()
-        .map_err(|_| format!("Invalid port number: {}. Must be between 0 and 65535", s))
-}
-
-/// Port mapping configuration for a provider
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PortMapping {
-    /// First port (server: LLM port, client: server proxy port)
-    pub port1: Option<u16>,
-    /// Second port (server: server proxy port, client: client proxy port)
-    pub port2: Option<u16>,
-}
-
-impl std::str::FromStr for PortMapping {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return Err(format!(
-                "Invalid port mapping format: {}. Expected <port1>:<port2>, <port1>: or :<port2>",
-                s
-            ));
-        }
-
-        match (parts[0].is_empty(), parts[1].is_empty()) {
-            // :<port2> format
-            (true, false) => {
-                let port2 = parse_port(parts[1])?;
-                Ok(PortMapping {
-                    port1: None,
-                    port2: Some(port2),
-                })
-            }
-            // <port1>: format
-            (false, true) => {
-                let port1 = parse_port(parts[0])?;
-                Ok(PortMapping {
-                    port1: Some(port1),
-                    port2: None,
-                })
-            }
-            // <port1>:<port2> format
-            (false, false) => {
-                let port1 = parse_port(parts[0])?;
-                let port2 = parse_port(parts[1])?;
-                Ok(PortMapping {
-                    port1: Some(port1),
-                    port2: Some(port2),
-                })
-            }
-            // Invalid format ":"
-            (true, true) => Err(format!(
-                "Invalid port mapping format: {}. Expected <port1>:<port2>, <port1>: or :<port2>",
-                s
-            )),
-        }
-    }
 }
 
 #[derive(clap::Args)]
@@ -226,17 +106,10 @@ impl ServeArgs {
     pub fn get_port_mappings(&self) -> HashMap<ProviderType, PortMapping> {
         let mut mappings = HashMap::new();
 
-        if let Some(ollama_mapping) = self.ollama_ports {
-            mappings.insert(ProviderType::Ollama, ollama_mapping);
-        }
-        if let Some(vllm_mapping) = self.vllm_ports {
-            mappings.insert(ProviderType::Vllm, vllm_mapping);
-        }
-        if let Some(lmstudio_mapping) = self.lmstudio_ports {
-            mappings.insert(ProviderType::LmStudio, lmstudio_mapping);
-        }
-        if let Some(llama_server_mapping) = self.llama_server_ports {
-            mappings.insert(ProviderType::LlamaServer, llama_server_mapping);
+        for &provider_type in crate::ALL_PROVIDER_TYPES {
+            if let Some(&mapping) = self.get_port_mapping(provider_type) {
+                mappings.insert(provider_type, mapping);
+            }
         }
 
         mappings
@@ -273,6 +146,8 @@ pub enum DeviceCommands {
 
 #[cfg(test)]
 mod tests {
+    use crate::ProviderType;
+
     use super::*;
 
     #[test]

@@ -248,6 +248,15 @@ impl UdpClientDiscovery {
         .await
     }
 
+    pub async fn with_allowed_providers(allowed_providers: Vec<ProviderType>) -> io::Result<Self> {
+        Self::new(
+            constants::OLLANA_SERVER_DEFAULT_DISCOVERY_PORT,
+            DEFAULT_CLIENT_BROADCAST_INTERVAL,
+            allowed_providers,
+        )
+        .await
+    }
+
     pub fn with_network(
         network: Arc<dyn ClientDiscoveryNetwork>,
         broadcast_interval: Duration,

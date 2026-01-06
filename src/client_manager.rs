@@ -26,7 +26,6 @@ use log::{debug, error, info};
 const DEFAULT_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct ActiveProxy {
-    provider_type: ProviderType,
     proxy: Box<dyn ClientProxy>,
     server_socket_addr: SocketAddr,
     liveness_handle: AbortHandle,
@@ -43,6 +42,7 @@ where
     liveness_interval: std::time::Duration,
     device: Arc<dyn Device>,
     proxy_factory: F,
+    allowed_providers: Vec<ProviderType>,
 }
 
 pub enum ClientManagerCommand {
@@ -56,18 +56,24 @@ where
         + Send
         + Sync,
 {
-    pub fn new(device: Arc<dyn Device>, proxy_factory: F) -> Self {
+    pub fn new(
+        device: Arc<dyn Device>,
+        proxy_factory: F,
+        allowed_providers: Vec<ProviderType>,
+    ) -> Self {
         Self {
             server_queues: HashMap::new(),
             active_proxies: HashMap::new(),
             liveness_interval: DEFAULT_LIVENESS_INTERVAL,
             device,
             proxy_factory,
+            allowed_providers,
         }
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        let client_discovery = UdpClientDiscovery::with_defaults().await?;
+        let client_discovery =
+            UdpClientDiscovery::with_allowed_providers(self.allowed_providers.clone()).await?;
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<ClientManagerCommand>(32);
 
@@ -241,7 +247,6 @@ where
             self.active_proxies.insert(
                 provider_type,
                 ActiveProxy {
-                    provider_type,
                     proxy,
                     server_socket_addr,
                     liveness_handle,

@@ -1,4 +1,4 @@
-use crate::args::{PortMapping, ProviderType};
+use crate::{PortMapping, ProviderType};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -33,23 +33,23 @@ pub trait Config: Send + Sync {
 pub struct TomlConfig {
     /// Comma-separated list of allowed provider types
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_providers: Option<Vec<String>>,
+    pub allowed_providers: Option<Vec<ProviderType>>,
 
     /// Port mapping for Ollama provider
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ollama_ports: Option<String>,
+    pub ollama_ports: Option<PortMapping>,
 
     /// Port mapping for vLLM provider
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vllm_ports: Option<String>,
+    pub vllm_ports: Option<PortMapping>,
 
     /// Port mapping for LM Studio provider
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub lmstudio_ports: Option<String>,
+    pub lmstudio_ports: Option<PortMapping>,
 
     /// Port mapping for llama.cpp server provider
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub llama_server_ports: Option<String>,
+    pub llama_server_ports: Option<PortMapping>,
 
     /// List of allowed device IDs
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,16 +68,10 @@ impl TomlConfig {
     /// - Valid port mapping formats
     /// - Port conflicts (same port used for multiple providers)
     fn validate(&self) -> anyhow::Result<()> {
-        // Validate allowed providers
-        self.parse_allowed_providers()?;
-
-        // Validate and collect port mappings
-        let port_mappings = self.parse_port_mappings()?;
-
         // Check for port conflicts
         let mut used_ports: HashMap<u16, Vec<String>> = HashMap::new();
 
-        for (provider_type, mapping) in &port_mappings {
+        for (provider_type, mapping) in self.get_port_mappings() {
             let provider_name = provider_type.to_string();
 
             // Check port1 (if present)
@@ -111,63 +105,27 @@ impl TomlConfig {
         Ok(())
     }
 
-    /// Parse allowed providers from string list
-    fn parse_allowed_providers(&self) -> anyhow::Result<Option<Vec<ProviderType>>> {
-        match &self.allowed_providers {
-            Some(providers) => {
-                let mut parsed = Vec::new();
-                for provider_str in providers {
-                    let provider = provider_str
-                        .parse::<ProviderType>()
-                        .map_err(|e| anyhow::anyhow!("Invalid provider in config file: {}", e))?;
-                    parsed.push(provider);
-                }
-                Ok(Some(parsed))
-            }
-            None => Ok(None),
+    /// Get the port mapping for a specific provider type
+    pub fn get_port_mapping(&self, provider_type: ProviderType) -> Option<&PortMapping> {
+        match provider_type {
+            ProviderType::Ollama => self.ollama_ports.as_ref(),
+            ProviderType::Vllm => self.vllm_ports.as_ref(),
+            ProviderType::LmStudio => self.lmstudio_ports.as_ref(),
+            ProviderType::LlamaServer => self.llama_server_ports.as_ref(),
         }
     }
 
-    /// Parse a port mapping string
-    fn parse_port_mapping(port_str: &str, provider: &str) -> anyhow::Result<PortMapping> {
-        port_str
-            .parse::<PortMapping>()
-            .map_err(|e| anyhow::anyhow!("Invalid {} port mapping in config file: {}", provider, e))
-    }
-
-    /// Parse all port mappings from config
-    fn parse_port_mappings(&self) -> anyhow::Result<HashMap<ProviderType, PortMapping>> {
+    /// Get all port mappings
+    pub fn get_port_mappings(&self) -> HashMap<ProviderType, PortMapping> {
         let mut mappings = HashMap::new();
 
-        if let Some(ref ollama_ports) = self.ollama_ports {
-            mappings.insert(
-                ProviderType::Ollama,
-                Self::parse_port_mapping(ollama_ports, "Ollama")?,
-            );
+        for &provider_type in crate::ALL_PROVIDER_TYPES {
+            if let Some(&mapping) = self.get_port_mapping(provider_type) {
+                mappings.insert(provider_type, mapping);
+            }
         }
 
-        if let Some(ref vllm_ports) = self.vllm_ports {
-            mappings.insert(
-                ProviderType::Vllm,
-                Self::parse_port_mapping(vllm_ports, "vLLM")?,
-            );
-        }
-
-        if let Some(ref lmstudio_ports) = self.lmstudio_ports {
-            mappings.insert(
-                ProviderType::LmStudio,
-                Self::parse_port_mapping(lmstudio_ports, "LM Studio")?,
-            );
-        }
-
-        if let Some(ref llama_server_ports) = self.llama_server_ports {
-            mappings.insert(
-                ProviderType::LlamaServer,
-                Self::parse_port_mapping(llama_server_ports, "llama.cpp server")?,
-            );
-        }
-
-        Ok(mappings)
+        mappings
     }
 }
 
@@ -296,17 +254,27 @@ vllm_ports = "8000:8001"
 
         // Access fields directly for validation tests
         assert_eq!(config.allowed_providers.as_ref().unwrap().len(), 2);
-        assert_eq!(config.ollama_ports.as_deref(), Some("11434:8888"));
-        assert_eq!(config.vllm_ports.as_deref(), Some("8000:8001"));
+        let ollama_ports = config.ollama_ports.unwrap();
+        assert_eq!(ollama_ports.port1, Some(11434));
+        assert_eq!(ollama_ports.port2, Some(8888));
+        let vllm_ports = config.vllm_ports.unwrap();
+        assert_eq!(vllm_ports.port1, Some(8000));
+        assert_eq!(vllm_ports.port2, Some(8001));
     }
 
     #[test]
     fn test_save_valid_config() {
         let temp_dir = TempDir::new().unwrap();
         let config = TomlConfig {
-            allowed_providers: Some(vec!["ollama".to_string(), "vllm".to_string()]),
-            ollama_ports: Some("11434:8888".to_string()),
-            vllm_ports: Some("8000:8001".to_string()),
+            allowed_providers: Some(vec![ProviderType::Ollama, ProviderType::Vllm]),
+            ollama_ports: Some(PortMapping {
+                port1: Some(11434),
+                port2: Some(8888),
+            }),
+            vllm_ports: Some(PortMapping {
+                port1: Some(8000),
+                port2: Some(8001),
+            }),
             dir: temp_dir.path().to_path_buf(),
             ..Default::default()
         };
@@ -326,15 +294,21 @@ allowed_providers = ["invalid_provider"]
         // Should fail during load due to invalid provider
         let result = TomlConfig::load(temp_dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid provider"));
+        assert!(result.unwrap_err().to_string().contains("unknown variant"));
     }
 
     #[test]
     fn test_save_config_with_port_conflict() {
         let temp_dir = TempDir::new().unwrap();
         let config = TomlConfig {
-            ollama_ports: Some("11434:8888".to_string()),
-            vllm_ports: Some("8000:8888".to_string()), // Conflict on port 8888
+            ollama_ports: Some(PortMapping {
+                port1: Some(11434),
+                port2: Some(8888),
+            }),
+            vllm_ports: Some(PortMapping {
+                port1: Some(8000),
+                port2: Some(8888),
+            }), // Conflict on port 8888
             dir: temp_dir.path().to_path_buf(),
             ..Default::default()
         };
@@ -418,7 +392,7 @@ allowed_providers = ["ollama"]
     fn test_allowed_devices_not_serialized_when_none() {
         let temp_dir = TempDir::new().unwrap();
         let config = TomlConfig {
-            allowed_providers: Some(vec!["ollama".to_string()]),
+            allowed_providers: Some(vec![ProviderType::Ollama]),
             dir: temp_dir.path().to_path_buf(),
             ..Default::default()
         };
