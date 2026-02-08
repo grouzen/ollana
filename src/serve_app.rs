@@ -3,19 +3,26 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use crate::{
     args::ServeArgs,
     certs::Certs,
-    client_manager::ClientManager,
+    client_discovery::{ClientDiscovery, UdpClientDiscovery},
+    client_manager::{ClientManager, ClientManagerCommand},
+    client_proxy::{ClientProxy, HttpClientProxy},
     constants,
     device::Device,
-    discovery::{convert_providers_to_server_proxy_ports, ServerDiscovery, UdpServerDiscovery},
     proto::ProviderType,
     provider::{LMStudio, LlamaServer, Ollama, Provider, VLLM},
-    proxy::{ClientProxy, HttpClientProxy, HttpServerProxy, ServerProxy},
+    server_discovery::{
+        convert_providers_to_server_proxy_ports, ServerDiscovery, UdpServerDiscovery,
+    },
+    server_manager::{ServerManager, ServerManagerCommand},
     Mode, PortMapping,
 };
 use daemonizr::{Daemonizr, Group, Stderr, Stdout, User};
 use futures_util::TryFutureExt;
 use log::{error, info, warn};
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::{
+    signal::unix::{signal, SignalKind},
+    sync::mpsc,
+};
 
 const DEFAULT_LOG_FILE_PATH: &str = "/var/log/ollana/serve.log";
 const DEFAULT_PID_FILE_PATH: &str = "/run/ollana.pid";
@@ -103,19 +110,9 @@ impl ServeApp {
         // Calculate server proxy ports for each provider
         let proxy_ports = self.calculate_server_proxy_port_mappings(&providers);
 
-        // Create server proxy with custom ports (for now, uses first provider's port)
-        // TODO: Support multiple server proxies per provider type
-        let server_proxy = if let Some((&provider_type, &proxy_port)) = proxy_ports.iter().next() {
-            info!(
-                "Starting server proxy for {:?} on port {}",
-                provider_type, proxy_port
-            );
-            HttpServerProxy::builder(self.device.clone())
-                .port(proxy_port)
-                .build()
-        } else {
-            HttpServerProxy::new(self.device.clone())
-        };
+        // Create ServerManager to dynamically start/stop server proxies
+        let mut server_manager =
+            ServerManager::new(self.device.clone(), self.certs.clone(), proxy_ports.clone());
 
         let server_discovery = UdpServerDiscovery::with_providers_and_ports(
             providers,
@@ -127,6 +124,9 @@ impl ServeApp {
         info!("Running in Server Mode");
 
         self.certs.gen_http_server()?;
+
+        // Create channel for ServerManager commands
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ServerManagerCommand>(32);
 
         // Prepare signal futures
         let mut sigterm = signal(SignalKind::terminate())?;
@@ -142,14 +142,18 @@ impl ServeApp {
                 info!("Received SIGTERM, shutting down Server Mode...");
                 Ok(())
             }
-            val = server_proxy.run_server(self.certs.as_ref()) => val,
-            val = server_discovery.run() => val,
+            val = server_manager.run(cmd_rx) => val,
+            val = server_discovery.run(&cmd_tx) => val,
         }
     }
 
     async fn run_client_mode(&self) -> anyhow::Result<()> {
         let port_mappings = self.port_mappings.clone();
-        let allowed_providers = self.allowed_providers.clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ClientManagerCommand>(32);
+
+        let client_discovery =
+            UdpClientDiscovery::with_allowed_providers(self.allowed_providers.clone()).await?;
 
         let mut manager = ClientManager::new(
             self.device.clone(),
@@ -177,7 +181,7 @@ impl ServeApp {
                         .build()?,
                 ) as Box<dyn ClientProxy>)
             },
-            allowed_providers,
+            self.allowed_providers.clone(),
         );
 
         info!("Running in Client Mode");
@@ -196,7 +200,8 @@ impl ServeApp {
                 info!("Received SIGTERM, shutting down Client Mode...");
                 Ok(())
             }
-            val = manager.run() => val,
+            val = manager.run(cmd_rx, &cmd_tx) => val,
+            val = client_discovery.run(&cmd_tx) => val,
         }
     }
 

@@ -1,18 +1,24 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
+use crate::provider::{LMStudio, LlamaServer, Ollama, Provider, VLLM};
+
 pub mod args;
 pub mod certs;
+pub mod client_discovery;
 pub mod client_manager;
+pub mod client_proxy;
 pub mod config;
 pub mod constants;
 pub mod device;
-pub mod discovery;
 pub mod ollana;
 pub mod provider;
-pub mod proxy;
 pub mod serve_app;
+pub mod server_discovery;
+pub mod server_health_monitor;
+pub mod server_manager;
+pub mod server_proxy;
 
 // Include generated protobuf code
 pub mod proto {
@@ -27,6 +33,13 @@ pub const ALL_PROVIDER_TYPES: &[ProviderType] = &[
     ProviderType::Vllm,
     ProviderType::LmStudio,
     ProviderType::LlamaServer,
+];
+
+pub const ALL_PROTO_PROVIDER_TYPES: &[proto::ProviderType] = &[
+    proto::ProviderType::Ollama,
+    proto::ProviderType::Vllm,
+    proto::ProviderType::LmStudio,
+    proto::ProviderType::LlamaServer,
 ];
 
 pub enum Mode {
@@ -54,6 +67,26 @@ pub fn get_local_dir() -> anyhow::Result<PathBuf> {
         .ok_or(anyhow::Error::msg(
             "Couldn't determine data local directory",
         ))
+}
+
+pub fn create_default_providers() -> HashMap<ProviderType, Arc<dyn Provider>> {
+    let mut providers: HashMap<ProviderType, Arc<dyn Provider>> = HashMap::new();
+
+    providers.insert(ProviderType::Ollama, Arc::new(Ollama::default()));
+    providers.insert(ProviderType::Vllm, Arc::new(VLLM::default()));
+    providers.insert(ProviderType::LmStudio, Arc::new(LMStudio::default()));
+    providers.insert(ProviderType::LlamaServer, Arc::new(LlamaServer::default()));
+
+    providers
+}
+
+pub fn create_default_proto_providers() -> HashMap<proto::ProviderType, Arc<dyn Provider>> {
+    let providers = create_default_providers();
+
+    providers
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.clone()))
+        .collect()
 }
 
 /// Parse a port number string into u16

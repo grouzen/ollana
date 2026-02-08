@@ -7,25 +7,24 @@ use std::{
 
 use futures_util::StreamExt;
 use tokio::{
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender},
     task::{AbortHandle, JoinHandle},
     time,
 };
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
+    client_proxy::ClientProxy,
     device::Device,
-    discovery::{ClientDiscovery, UdpClientDiscovery},
     ollana::{HttpOllana, Ollana},
     proto::ProviderType,
     provider::{Ollama, Provider},
-    proxy::ClientProxy,
 };
 use log::{debug, error, info};
 
 const DEFAULT_LIVENESS_INTERVAL: Duration = Duration::from_secs(10);
 
-pub struct ActiveProxy {
+pub struct ActiveClientProxy {
     proxy: Box<dyn ClientProxy>,
     server_socket_addr: SocketAddr,
     liveness_handle: AbortHandle,
@@ -38,7 +37,7 @@ where
         + Sync,
 {
     server_queues: HashMap<ProviderType, VecDeque<SocketAddr>>,
-    active_proxies: HashMap<ProviderType, ActiveProxy>,
+    active_proxies: HashMap<ProviderType, ActiveClientProxy>,
     liveness_interval: std::time::Duration,
     device: Arc<dyn Device>,
     proxy_factory: F,
@@ -71,19 +70,7 @@ where
         }
     }
 
-    pub async fn run(&mut self) -> anyhow::Result<()> {
-        let client_discovery =
-            UdpClientDiscovery::with_allowed_providers(self.allowed_providers.clone()).await?;
-
-        let (cmd_tx, cmd_rx) = mpsc::channel::<ClientManagerCommand>(32);
-
-        tokio::select! {
-            val = self.handle_commands(cmd_rx, &cmd_tx) => val,
-            val = client_discovery.run(&cmd_tx) => val
-        }
-    }
-
-    async fn handle_commands(
+    pub async fn run(
         &mut self,
         mut cmd_rx: Receiver<ClientManagerCommand>,
         cmd_tx: &Sender<ClientManagerCommand>,
@@ -236,7 +223,11 @@ where
             server_socket_addr
         );
 
-        actix_web::rt::spawn(async move { client_proxy.run_server(tx).await });
+        actix_web::rt::spawn(async move {
+            if let Err(e) = client_proxy.run_server(tx).await {
+                error!("Client proxy error: {}", e);
+            }
+        });
 
         if let Ok(proxy) = rx.await {
             let liveness_handle = self
@@ -246,7 +237,7 @@ where
 
             self.active_proxies.insert(
                 provider_type,
-                ActiveProxy {
+                ActiveClientProxy {
                     proxy,
                     server_socket_addr,
                     liveness_handle,
