@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+  GITHUB_TOKEN: ${{ github.token }}
   CARGO_TERM_COLOR: always
 
 jobs: 
@@ -64,7 +64,7 @@ jobs:
         
       - name: Install cross
         if: matrix.use-cross
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.3
         with:
          tool: cross
 
